@@ -52,6 +52,42 @@ class TableConnection(PynamoDBTableConnection):
             return_consumed_capacity=return_consumed_capacity,
             return_item_collection_metrics=return_item_collection_metrics)
 
+    async def query(self,
+                    hash_key,
+                    range_key_condition=None,
+                    filter_condition=None,
+                    attributes_to_get=None,
+                    consistent_read=False,
+                    exclusive_start_key=None,
+                    index_name=None,
+                    key_conditions=None,
+                    query_filters=None,
+                    limit=None,
+                    return_consumed_capacity=None,
+                    scan_index_forward=None,
+                    conditional_operator=None,
+                    select=None
+                    ):
+        """
+        Performs the Query operation and returns the result
+        """
+        return await self.connection.query(
+            self.table_name,
+            hash_key,
+            range_key_condition=range_key_condition,
+            filter_condition=filter_condition,
+            attributes_to_get=attributes_to_get,
+            consistent_read=consistent_read,
+            exclusive_start_key=exclusive_start_key,
+            index_name=index_name,
+            key_conditions=key_conditions,
+            query_filters=query_filters,
+            limit=limit,
+            return_consumed_capacity=return_consumed_capacity,
+            scan_index_forward=scan_index_forward,
+            conditional_operator=conditional_operator,
+            select=select)
+
     async def describe_table(self):
         """
         Performs the DescribeTable operation and returns the result

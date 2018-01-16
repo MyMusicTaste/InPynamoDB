@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import random
-import uuid
 
 import time
 from aiobotocore import get_session
@@ -18,8 +17,12 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     RETURN_CONSUMED_CAPACITY, TOTAL, CONSUMED_CAPACITY, CAPACITY_UNITS, PROVISIONED_THROUGHPUT, READ_CAPACITY_UNITS, \
     WRITE_CAPACITY_UNITS, ATTR_NAME, ATTR_TYPE, ATTR_DEFINITIONS, INDEX_NAME, KEY_SCHEMA, PROJECTION, KEY_TYPE, \
     GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, STREAM_SPECIFICATION, STREAM_ENABLED, STREAM_VIEW_TYPE, \
-    TABLE_KEY, KEY
-from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist
+    TABLE_KEY, KEY, COMPARISON_OPERATOR, COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, ATTR_VALUE_LIST, \
+    KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
+    SCAN_INDEX_FORWARD, QUERY
+from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist, QueryError
+from pynamodb.expressions.operand import Path
+from pynamodb.expressions.projection import create_projection_expression
 
 from pynamodb_async.settings import get_settings_value
 
@@ -144,6 +147,142 @@ class AsyncConnection(base.Connection):
 
             return self._handle_binary_attributes(data)
 
+    async def _get_condition(self, table_name, attribute_name, operator, *values):
+        values = [
+            {await self.get_attribute_type(table_name, attribute_name, value): self.parse_attribute(value)}
+            for value in values
+        ]
+        return getattr(Path([attribute_name]), operator)(*values)
+
+    async def get_attribute_type(self, table_name, attribute_name, value=None):
+        """
+        Returns the proper attribute type for a given attribute name
+        :param value: The attribute value an be supplied just in case the type is already included
+        """
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table {0}".format(table_name))
+        return tbl.get_attribute_type(attribute_name, value=value)
+
+    async def query(self,
+                    table_name,
+                    hash_key,
+                    range_key_condition=None,
+                    filter_condition=None,
+                    attributes_to_get=None,
+                    consistent_read=False,
+                    exclusive_start_key=None,
+                    index_name=None,
+                    key_conditions=None,
+                    query_filters=None,
+                    conditional_operator=None,
+                    limit=None,
+                    return_consumed_capacity=None,
+                    scan_index_forward=None,
+                    select=None):
+        """
+        Performs the Query operation and returns the result
+        """
+        self._check_condition('range_key_condition', range_key_condition, key_conditions, conditional_operator)
+        self._check_condition('filter_condition', filter_condition, query_filters, conditional_operator)
+
+        operation_kwargs = {TABLE_NAME: table_name}
+        name_placeholders = {}
+        expression_attribute_values = {}
+
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table: {0}".format(table_name))
+        if index_name:
+            hash_keyname = tbl.get_index_hash_keyname(index_name)
+            if not hash_keyname:
+                raise ValueError("No hash key attribute for index: {0}".format(index_name))
+            range_keyname = tbl.get_index_range_keyname(index_name)
+        else:
+            hash_keyname = tbl.hash_keyname
+            range_keyname = tbl.range_keyname
+
+        key_condition = await self._get_condition(table_name, hash_keyname, '__eq__', hash_key)
+        if range_key_condition is not None:
+            if range_key_condition.is_valid_range_key_condition(range_keyname):
+                key_condition = key_condition & range_key_condition
+            elif filter_condition is None:
+                # Try to gracefully handle the case where a user passed in a filter as a range key condition
+                (filter_condition, range_key_condition) = (range_key_condition, None)
+            else:
+                raise ValueError("{0} is not a valid range key condition".format(range_key_condition))
+
+        if key_conditions is None or len(key_conditions) == 0:
+            pass  # No comparisons on sort key
+        elif len(key_conditions) > 1:
+            raise ValueError("Multiple attributes are not supported in key_conditions: {0}".format(key_conditions))
+        else:
+            (key, condition), = key_conditions.items()
+            operator = condition.get(COMPARISON_OPERATOR)
+            if operator not in COMPARISON_OPERATOR_VALUES:
+                raise ValueError("{0} must be one of {1}".format(COMPARISON_OPERATOR, COMPARISON_OPERATOR_VALUES))
+            operator = KEY_CONDITION_OPERATOR_MAP[operator]
+            values = condition.get(ATTR_VALUE_LIST)
+            sort_key_expression = await self._get_condition(table_name, key, operator, *values)
+            key_condition = key_condition & sort_key_expression
+
+        operation_kwargs[KEY_CONDITION_EXPRESSION] = key_condition.serialize(
+            name_placeholders, expression_attribute_values)
+        if filter_condition is not None:
+            filter_expression = filter_condition.serialize(name_placeholders, expression_attribute_values)
+            # FilterExpression does not allow key attributes. Check for hash and range key name placeholders
+            hash_key_placeholder = name_placeholders.get(hash_keyname)
+            range_key_placeholder = range_keyname and name_placeholders.get(range_keyname)
+            if (
+                    hash_key_placeholder in filter_expression or
+                    (range_key_placeholder and range_key_placeholder in filter_expression)
+            ):
+                raise ValueError("'filter_condition' cannot contain key attributes")
+            operation_kwargs[FILTER_EXPRESSION] = filter_expression
+        if attributes_to_get:
+            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
+            operation_kwargs[PROJECTION_EXPRESSION] = projection_expression
+        if consistent_read:
+            operation_kwargs[CONSISTENT_READ] = True
+        if exclusive_start_key:
+            operation_kwargs.update(await self.get_exclusive_start_key_map(table_name, exclusive_start_key))
+        if index_name:
+            operation_kwargs[INDEX_NAME] = index_name
+        if limit is not None:
+            operation_kwargs[LIMIT] = limit
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        # We read the conditional operator even without a query filter passed in to maintain existing behavior.
+        conditional_operator = self.get_conditional_operator(conditional_operator or AND)
+        if query_filters:
+            filter_expression = self._get_filter_expression(
+                table_name, query_filters, conditional_operator, name_placeholders, expression_attribute_values)
+            operation_kwargs[FILTER_EXPRESSION] = filter_expression
+        if select:
+            if select.upper() not in SELECT_VALUES:
+                raise ValueError("{0} must be one of {1}".format(SELECT, SELECT_VALUES))
+            operation_kwargs[SELECT] = str(select).upper()
+        if scan_index_forward is not None:
+            operation_kwargs[SCAN_INDEX_FORWARD] = scan_index_forward
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        if expression_attribute_values:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_VALUES] = expression_attribute_values
+
+        try:
+            return await self.dispatch(QUERY, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise QueryError("Failed to query items: {0}".format(e), e)
+
+    async def get_exclusive_start_key_map(self, table_name, exclusive_start_key):
+        """
+        Builds the exclusive start key attribute map
+        """
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table {0}".format(table_name))
+        return tbl.get_exclusive_start_key_map(exclusive_start_key)
+
     async def dispatch(self, operation_name, operation_kwargs):
         """
         Dispatches `operation_name` with arguments `operation_kwargs`
@@ -221,16 +360,16 @@ class AsyncConnection(base.Connection):
             pythonic_key=pythonic_key)
 
     async def put_item(self,
-                 table_name,
-                 hash_key,
-                 range_key=None,
-                 attributes=None,
-                 condition=None,
-                 expected=None,
-                 conditional_operator=None,
-                 return_values=None,
-                 return_consumed_capacity=None,
-                 return_item_collection_metrics=None):
+                       table_name,
+                       hash_key,
+                       range_key=None,
+                       attributes=None,
+                       condition=None,
+                       expected=None,
+                       conditional_operator=None,
+                       return_values=None,
+                       return_consumed_capacity=None,
+                       return_item_collection_metrics=None):
         """
         Performs the PutItem operation and returns the result
         """
