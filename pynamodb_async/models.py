@@ -73,7 +73,12 @@ class Model(PynamoDBModel):
             kwargs.update(expected=self._build_expected_values(expected_values, PUT_FILTER_OPERATOR_MAP))
         kwargs.update(conditional_operator=conditional_operator)
         kwargs.update(condition=condition)
-        return await self._get_connection().put_item(*args, **kwargs)
+
+        result = await self._get_connection().put_item(*args, **kwargs)
+
+        await self._get_connection().connection.close_session()
+
+        return result
 
     @classmethod
     def _get_connection(cls):

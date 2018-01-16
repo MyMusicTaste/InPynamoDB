@@ -17,7 +17,8 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     EXPRESSION_ATTRIBUTE_VALUES, PUT_ITEM, AND, DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE_TABLE, CREATE_TABLE, \
     RETURN_CONSUMED_CAPACITY, TOTAL, CONSUMED_CAPACITY, CAPACITY_UNITS, PROVISIONED_THROUGHPUT, READ_CAPACITY_UNITS, \
     WRITE_CAPACITY_UNITS, ATTR_NAME, ATTR_TYPE, ATTR_DEFINITIONS, INDEX_NAME, KEY_SCHEMA, PROJECTION, KEY_TYPE, \
-    GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, STREAM_SPECIFICATION, STREAM_ENABLED, STREAM_VIEW_TYPE, TABLE_KEY
+    GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, STREAM_SPECIFICATION, STREAM_ENABLED, STREAM_VIEW_TYPE, \
+    TABLE_KEY, KEY
 from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist
 
 from pynamodb_async.settings import get_settings_value
@@ -166,6 +167,15 @@ class AsyncConnection(base.Connection):
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
 
+    async def get_identifier_map(self, table_name, hash_key, range_key=None, key=KEY):
+        """
+        Builds the identifier map that is common to several operations
+        """
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table {0}".format(table_name))
+        return tbl.get_identifier_map(hash_key, range_key=range_key, key=key)
+
     async def describe_table(self, table_name):
         """
         Performs the DescribeTable operation
@@ -197,6 +207,67 @@ class AsyncConnection(base.Connection):
                 else:
                     raise
         return self._tables[table_name]
+
+    async def get_item_attribute_map(self, table_name, attributes, item_key=ITEM, pythonic_key=True):
+        """
+        Builds up a dynamodb compatible AttributeValue map
+        """
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table {0}".format(table_name))
+        return tbl.get_item_attribute_map(
+            attributes,
+            item_key=item_key,
+            pythonic_key=pythonic_key)
+
+    async def put_item(self,
+                 table_name,
+                 hash_key,
+                 range_key=None,
+                 attributes=None,
+                 condition=None,
+                 expected=None,
+                 conditional_operator=None,
+                 return_values=None,
+                 return_consumed_capacity=None,
+                 return_item_collection_metrics=None):
+        """
+        Performs the PutItem operation and returns the result
+        """
+        self._check_condition('condition', condition, expected, conditional_operator)
+
+        operation_kwargs = {TABLE_NAME: table_name}
+        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key, key=ITEM))
+        name_placeholders = {}
+        expression_attribute_values = {}
+
+        if attributes:
+            attrs = await self.get_item_attribute_map(table_name, attributes)
+            operation_kwargs[ITEM].update(attrs[ITEM])
+        if condition is not None:
+            condition_expression = condition.serialize(name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if return_item_collection_metrics:
+            operation_kwargs.update(self.get_item_collection_map(return_item_collection_metrics))
+        if return_values:
+            operation_kwargs.update(self.get_return_values_map(return_values))
+        # We read the conditional operator even without expected passed in to maintain existing behavior.
+        conditional_operator = self.get_conditional_operator(conditional_operator or AND)
+        if expected:
+            condition_expression = self._get_condition_expression(
+                table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        if expression_attribute_values:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_VALUES] = expression_attribute_values
+
+        try:
+            return await self.dispatch(PUT_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise PutError("Failed to put item: {0}".format(e), e)
 
     async def create_table(self,
                            table_name,
