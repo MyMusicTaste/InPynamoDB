@@ -6,10 +6,10 @@ This transforms [PynamoDB](https://github.com/pynamodb/PynamoDB)'s basic methods
 
 ## Developed
 - create_table
+- models.save
+- models.get
 
 ## TODO
 - models.delete_table()
-- models.save()
-- models.get()
 - models.delete()
 - batch_write.put_items()
