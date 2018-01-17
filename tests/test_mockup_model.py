@@ -1,6 +1,8 @@
 import asyncio
 
 import time
+
+import aiohttp
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute
 
 from tests import test_settings as settings
@@ -19,10 +21,10 @@ class TestModelAsync(Model):
     description = UnicodeAttribute()
 
     async def save(self, condition=None, conditional_operator=None, **expected_values):
-        asyncio.sleep(0.05)  # possible IO blocking - 50ms
-        print("STARTED: Model id " + str(self.temp_id))
+        # await asyncio.sleep(0.05)  # possible IO blocking - 50ms
+        # print("STARTED: Model id " + str(self.temp_id))
         await super(TestModelAsync, self).save(condition, conditional_operator, **expected_values)
-        print("ENDED: Model id " + str(self.temp_id))
+        # print("ENDED: Model id " + str(self.temp_id))
 
 
 class TestModelSync(PynamoDBModel):
@@ -41,7 +43,7 @@ class TestModelSync(PynamoDBModel):
             super(TestModelSync, self).__init__(hash_key, range_key, **attributes)
 
         def save(self, condition=None, conditional_operator=None, **expected_values):
-            time.sleep(0.05)  # possible IO blocking - 50ms
-            print("STARTED: Model id " + str(self.temp_id))
+            # time.sleep(0.05)  # possible IO blocking - 50ms
+            # print("STARTED: Model id " + str(self.temp_id))
             super(TestModelSync, self).save(condition, conditional_operator, **expected_values)
-            print("ENDED: Model id " + str(self.temp_id))
+            # print("ENDED: Model id " + str(self.temp_id))

@@ -1,20 +1,69 @@
 import copy
 import inspect
 
+from botocore.vendored.six import add_metaclass
+from pynamodb.attributes import AttributeContainerMeta, Attribute
 from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
-from pynamodb.exceptions import TableDoesNotExist
-from pynamodb.models import Model as PynamoDBModel
+from pynamodb.exceptions import TableDoesNotExist, DoesNotExist
+from pynamodb.indexes import Index
+from pynamodb.models import Model as PynamoDBModel, DefaultMeta
 from pynamodb_async.pagination import ResultIterator
 
 from pynamodb_async.connection.table import TableConnection
 from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, \
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
-    ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP
+    ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST
+from pynamodb_async.settings import get_settings_value
 
 
 class InvalidUsageException(Exception):
     pass
+
+
+class MetaModel(AttributeContainerMeta):
+    """
+       Model meta class
+
+       This class is just here so that index queries have nice syntax.
+       Model.index.query()
+       """
+
+    def __init__(cls, name, bases, attrs):
+        super(MetaModel, cls).__init__(name, bases, attrs)
+        if isinstance(attrs, dict):
+            for attr_name, attr_obj in attrs.items():
+                if attr_name == META_CLASS_NAME:
+                    if not hasattr(attr_obj, REGION):
+                        setattr(attr_obj, REGION, get_settings_value('region'))
+                    if not hasattr(attr_obj, HOST):
+                        setattr(attr_obj, HOST, get_settings_value('host'))
+                    if not hasattr(attr_obj, 'session_cls'):
+                        setattr(attr_obj, 'session_cls', get_settings_value('session_cls'))
+                    if not hasattr(attr_obj, 'request_timeout_seconds'):
+                        setattr(attr_obj, 'request_timeout_seconds', get_settings_value('request_timeout_seconds'))
+                    if not hasattr(attr_obj, 'base_backoff_ms'):
+                        setattr(attr_obj, 'base_backoff_ms', get_settings_value('base_backoff_ms'))
+                    if not hasattr(attr_obj, 'max_retry_attempts'):
+                        setattr(attr_obj, 'max_retry_attempts', get_settings_value('max_retry_attempts'))
+                elif issubclass(attr_obj.__class__, (Index,)):
+                    attr_obj.Meta.model = cls
+                    if not hasattr(attr_obj.Meta, "index_name"):
+                        attr_obj.Meta.index_name = attr_name
+                elif issubclass(attr_obj.__class__, (Attribute,)):
+                    if attr_obj.attr_name is None:
+                        attr_obj.attr_name = attr_name
+
+            if META_CLASS_NAME not in attrs:
+                setattr(cls, META_CLASS_NAME, DefaultMeta)
+
+            # create a custom Model.DoesNotExist derived from pynamodb.exceptions.DoesNotExist,
+            # so that "except Model.DoesNotExist:" would not catch other models' exceptions
+            if 'DoesNotExist' not in attrs:
+                exception_attrs = {'__module__': attrs.get('__module__')}
+                if hasattr(cls, '__qualname__'):  # On Python 3, Model.DoesNotExist
+                    exception_attrs['__qualname__'] = '{}.{}'.format(cls.__qualname__, 'DoesNotExist')
+                cls.DoesNotExist = type('DoesNotExist', (DoesNotExist,), exception_attrs)
 
 
 class Model(PynamoDBModel):
@@ -76,8 +125,6 @@ class Model(PynamoDBModel):
             result = await cls._get_connection().create_table(
                 **schema
             )
-
-            await cls._get_connection().connection.close_session()
 
             return result
 
@@ -195,8 +242,6 @@ class Model(PynamoDBModel):
             limit=limit
         )
 
-        await cls._get_connection().connection.close_session()
-
         return iterator
 
     @classmethod
@@ -221,11 +266,7 @@ class Model(PynamoDBModel):
         kwargs.update(conditional_operator=conditional_operator)
         kwargs.update(condition=condition)
 
-        result = await self._get_connection().put_item(*args, **kwargs)
-
-        await self._get_connection().connection.close_session()
-
-        return result
+        return await self._get_connection().put_item(*args, **kwargs)
 
     @classmethod
     async def _range_key_attribute(cls):

@@ -32,14 +32,40 @@ log.addHandler(NullHandler())
 
 class AsyncConnection(base.Connection):
     # TODO need to override my methods
-    def __init__(self, region=None, host=None, session_cls=None, loop=None, request_timeout_seconds=None,
-                 max_retry_attempts=None, base_backoff_ms=None):
-        super().__init__(region, host, session_cls, request_timeout_seconds, max_retry_attempts, base_backoff_ms)
+    def __init__(self, region=None, host=None, session_cls=None, request_timeout_seconds=None, max_retry_attempts=None,
+                 base_backoff_ms=None):
+        self._tables = {}
+        self.host = host
+        self._client = None
+        self._session = None
+        self._requests_session = None
+        if region:
+            self.region = region
+        else:
+            self.region = get_settings_value('region')
 
-        self.loop = loop
+        if session_cls:
+            self.session_cls = session_cls
+        else:
+            self.session_cls = get_settings_value('session_cls')
 
-        if loop is None:
-            self.loop = asyncio.get_event_loop()
+        if request_timeout_seconds is not None:
+            self._request_timeout_seconds = request_timeout_seconds
+        else:
+            self._request_timeout_seconds = get_settings_value('request_timeout_seconds')
+
+        if max_retry_attempts is not None:
+            self._max_retry_attempts_exception = max_retry_attempts
+        else:
+            self._max_retry_attempts_exception = get_settings_value('max_retry_attempts')
+
+        if base_backoff_ms is not None:
+            self._base_backoff_ms = base_backoff_ms
+        else:
+            self._base_backoff_ms = get_settings_value('base_backoff_ms')
+
+    def __del__(self):
+        self.close_session()
 
     @property
     def session(self):
@@ -50,6 +76,9 @@ class AsyncConnection(base.Connection):
             self._session = get_session()
         return self._session
 
+    def close_session(self):
+        self.client.close()
+
     @property
     def requests_session(self):
         """
@@ -58,94 +87,6 @@ class AsyncConnection(base.Connection):
         if self._requests_session is None:
             self._requests_session = self.session_cls()
         return self._requests_session
-
-    async def close_session(self):
-        self.client.close()
-
-    async def _make_api_call(self, operation_name, operation_kwargs):
-        """
-        This private method is here for two reasons:
-        1. It's faster to avoid using botocore's response parsing
-        2. It provides a place to monkey patch requests for unit testing
-        """
-        operation_model = self.client._service_model.operation_model(operation_name)
-        request_dict = self.client._convert_to_request_dict(
-            operation_kwargs,
-            operation_model
-        )
-        prepared_request = self._create_prepared_request(request_dict, operation_model)
-
-        for i in range(0, self._max_retry_attempts_exception + 1):
-            attempt_number = i + 1
-            is_last_attempt_for_exceptions = i == self._max_retry_attempts_exception
-
-            try:
-                response = self.requests_session.send(
-                    prepared_request,
-                    timeout=self._request_timeout_seconds,
-                    proxies=self.client._endpoint.proxies,
-                )
-                data = response.json()
-            except (requests.RequestException, ValueError) as e:
-                if is_last_attempt_for_exceptions:
-                    log.debug('Reached the maximum number of retry attempts: %s', attempt_number)
-                    raise
-                else:
-                    # No backoff for fast-fail exceptions that likely failed at the frontend
-                    log.debug(
-                        'Retry needed for (%s) after attempt %s, retryable %s caught: %s',
-                        operation_name,
-                        attempt_number,
-                        e.__class__.__name__,
-                        e
-                    )
-                    continue
-
-            if response.status_code >= 300:
-                # Extract error code from __type
-                code = data.get('__type', '')
-                if '#' in code:
-                    code = code.rsplit('#', 1)[1]
-                botocore_expected_format = {'Error': {'Message': data.get('message', ''), 'Code': code}}
-                verbose_properties = {
-                    'request_id': response.headers.get('x-amzn-RequestId')
-                }
-
-                if 'RequestItems' in operation_kwargs:
-                    # Batch operations can hit multiple tables, report them comma separated
-                    verbose_properties['table_name'] = ','.join(operation_kwargs['RequestItems'])
-                else:
-                    verbose_properties['table_name'] = operation_kwargs.get('TableName')
-
-                try:
-                    raise VerboseClientError(botocore_expected_format, operation_name, verbose_properties)
-                except VerboseClientError as e:
-                    if is_last_attempt_for_exceptions:
-                        log.debug('Reached the maximum number of retry attempts: %s', attempt_number)
-                        raise
-                    elif response.status_code < 500 and code != 'ProvisionedThroughputExceededException':
-                        # We don't retry on a ConditionalCheckFailedException or other 4xx (except for
-                        # throughput related errors) because we assume they will fail in perpetuity.
-                        # Retrying when there is already contention could cause other problems
-                        # in part due to unnecessary consumption of throughput.
-                        raise
-                    else:
-                        # We use fully-jittered exponentially-backed-off retries:
-                        #  https://www.awsarchitectureblog.com/2015/03/backoff.html
-                        sleep_time_ms = random.randint(0, self._base_backoff_ms * (2 ** i))
-                        log.debug(
-                            'Retry with backoff needed for (%s) after attempt %s,'
-                            'sleeping for %s milliseconds, retryable %s caught: %s',
-                            operation_name,
-                            attempt_number,
-                            sleep_time_ms,
-                            e.__class__.__name__,
-                            e
-                        )
-                        time.sleep(sleep_time_ms / 1000.0)
-                        continue
-
-            return self._handle_binary_attributes(data)
 
     async def _get_condition(self, table_name, attribute_name, operator, *values):
         values = [
@@ -296,8 +237,9 @@ class AsyncConnection(base.Connection):
 
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
-        data = await self._make_api_call(operation_name, operation_kwargs)
-        # self.send_post_boto_callback(operation_name, req_uuid, table_name)
+        # data = await self._make_api_call(operation_name, operation_kwargs)
+        # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
+        data = await self.client._make_api_call(operation_name, operation_kwargs)
 
         if data and CONSUMED_CAPACITY in data:
             capacity = data.get(CONSUMED_CAPACITY)

@@ -3,17 +3,18 @@ import logging
 import os
 from os import getenv
 
+import aiobotocore
 import aiohttp
-from botocore.vendored import requests
 
 log = logging.getLogger(__name__)
+os.environ["PYNAMODB_CONFIG"] = os.path.dirname(os.path.abspath(__file__))
 
 default_settings_dict = {
     'request_timeout_seconds': 60,
     'max_retry_attempts': 3,
     'base_backoff_ms': 25,
     'region': 'us-east-1',
-    'session_cls': aiohttp.ClientSession,
+    'session_cls': aiobotocore.get_session(),
     'allow_rate_limited_scan_without_consumed_capacity': False,
 }
 
