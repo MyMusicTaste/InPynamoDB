@@ -160,7 +160,7 @@ class Model(PynamoDBModel):
             attr = cls._get_attributes().get(attr_name, None)
             if attr:
                 kwargs[attr_name] = attr.deserialize(attr.get_value(value))
-        return cls(*args, **kwargs)
+        return await cls.create(*args, **kwargs)
 
     @classmethod
     async def query(cls,

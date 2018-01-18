@@ -7,7 +7,7 @@ from tests.test_mockup_model import TestModelSync, TestModelAsync
 
 
 def sync_main():
-    for i in range(100):
+    for i in range(10000):
         temp_id = i
         name = ''.join(random.choice('0123456789ABCDEF') for i in range(16))
 
@@ -17,20 +17,17 @@ def sync_main():
 
 
 async def async_main():
-    tasks = list()
+    _start_time = time.time()
+    print("ASYNC_MAIN: Starts at " + str(_start_time))
 
-    for i in range(100):
+    for i in range(10000):
         temp_id = i
         name = ''.join(random.choice('0123456789ABCDEF') for i in range(16))
 
         test_model = await TestModelAsync.create(temp_id=temp_id, name=name, description=(name + " - " + str(temp_id)))
 
-        tasks.append(test_model.save())
+        await test_model.save()
 
-    task_group = asyncio.gather(*tasks)
-    _start_time = time.time()
-    print("ASYNC_MAIN: Starts at " + str(_start_time))
-    await task_group
     _end_time = time.time()
     print("ASYNC_MAIN: Ends at " + str(_end_time))
     print("ASYNC_ELAPSED_TIME: " + str(_end_time - _start_time))

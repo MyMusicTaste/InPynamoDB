@@ -237,7 +237,6 @@ class AsyncConnection(base.Connection):
 
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
-        # data = await self._make_api_call(operation_name, operation_kwargs)
         # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
         data = await self.client._make_api_call(operation_name, operation_kwargs)
 

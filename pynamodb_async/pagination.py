@@ -27,31 +27,35 @@ class ResultIterator(object):
         self._index = 0 if self._items else self._count
         self._total_count += self._count
 
-    def __iter__(self):
+    def __aiter__(self):
         return self
 
     async def __anext__(self):
-        if self._limit == 0:
-            raise StopIteration
+        try:
+            if self._limit == 0:
+                raise StopIteration
 
-        if self._needs_execute:
-            self._needs_execute = False
-            await self._execute()
+            if self._needs_execute:
+                self._needs_execute = False
+                await self._execute()
 
-        while self._index == self._count and self._last_evaluated_key:
-            self._kwargs['exclusive_start_key'] = self._last_evaluated_key
-            await self._execute()
+            while self._index == self._count and self._last_evaluated_key:
+                self._kwargs['exclusive_start_key'] = self._last_evaluated_key
+                await self._execute()
 
-        if self._index == self._count:
-            raise StopIteration
+            if self._index == self._count:
+                raise StopIteration
 
-        item = self._items[self._index]
-        self._index += 1
-        if self._limit is not None:
-            self._limit -= 1
-        if self._map_fn:
-            await self._map_fn(item)
-        return item
+            item = self._items[self._index]
+            self._index += 1
+            if self._limit is not None:
+                self._limit -= 1
+            if self._map_fn:
+                item = await self._map_fn(item)
+            return item
+
+        except StopIteration:
+            raise StopAsyncIteration
 
     async def next(self):
         return await self.__anext__()
