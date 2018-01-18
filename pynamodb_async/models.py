@@ -1,5 +1,6 @@
 import copy
 import inspect
+import warnings
 
 from botocore.vendored.six import add_metaclass
 from pynamodb.attributes import AttributeContainerMeta, Attribute
@@ -13,7 +14,9 @@ from pynamodb_async.pagination import ResultIterator
 from pynamodb_async.connection.table import TableConnection
 from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, \
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
-    ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST
+    ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
+    RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
+    ATTR_TYPE_MAP
 from pynamodb_async.settings import get_settings_value
 
 
@@ -91,6 +94,13 @@ class Model(PynamoDBModel):
         return cls(**attributes)
 
     @classmethod
+    async def delete_table(cls):
+        """
+        Delete the table for this model
+        """
+        return await cls._get_connection().delete_table()
+
+    @classmethod
     async def create_table(cls, wait=False, read_capacity_units=None, write_capacity_units=None):
         """
         :param wait: argument for making this method identical to PynamoDB, but not-used variable
@@ -127,6 +137,110 @@ class Model(PynamoDBModel):
             )
 
             return result
+
+    async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None, **expected_values):
+        """
+        Updates an item using the UpdateItem operation.
+
+        This should be used for updating a single attribute of an item.
+
+        :param attribute: The name of the attribute to be updated
+        :param value: The new value for the attribute.
+        :param action: The action to take if this item already exists.
+            See: http://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateItem.html#DDB-UpdateItem-request-AttributeUpdate
+        """
+        warnings.warn("`Model.update_item` is deprecated in favour of `Model.update` now")
+
+        self._conditional_operator_check(conditional_operator)
+        args, save_kwargs = self._get_save_args(null_check=False)
+        attribute_cls = None
+        for attr_name, attr_cls in self._get_attributes().items():
+            if attr_name == attribute:
+                attribute_cls = attr_cls
+                break
+        if not attribute_cls:
+            raise ValueError("Attribute {0} specified does not exist".format(attr_name))
+        if save_kwargs.get(pythonic(RANGE_KEY)):
+            kwargs = {pythonic(RANGE_KEY): save_kwargs.get(pythonic(RANGE_KEY))}
+        else:
+            kwargs = {}
+        if len(expected_values):
+            kwargs.update(expected=self._build_expected_values(expected_values, UPDATE_FILTER_OPERATOR_MAP))
+        kwargs[pythonic(ATTR_UPDATES)] = {
+            attribute_cls.attr_name: {
+                ACTION: action.upper() if action else None,
+            }
+        }
+        if value is not None:
+            kwargs[pythonic(ATTR_UPDATES)][attribute_cls.attr_name][VALUE] = {
+                ATTR_TYPE_MAP[attribute_cls.attr_type]: attribute_cls.serialize(value)
+            }
+        kwargs[pythonic(RETURN_VALUES)] = ALL_NEW
+        kwargs.update(conditional_operator=conditional_operator)
+        kwargs.update(condition=condition)
+        data = await self._get_connection().update_item(
+            *args,
+            **kwargs
+        )
+
+        for name, value in data.get(ATTRIBUTES).items():
+            attr_name = self._dynamo_to_python_attr(name)
+            attr = self._get_attributes().get(attr_name)
+            if attr:
+                setattr(self, attr_name, attr.deserialize(value.get(ATTR_TYPE_MAP[attr.attr_type])))
+        return data
+
+    async def update(self, attributes=None, actions=None, condition=None, conditional_operator=None, **expected_values):
+        """
+        Updates an item using the UpdateItem operation.
+
+        :param attributes: A dictionary of attributes to update in the following format
+                            {
+                                attr_name: {'value': 10, 'action': 'ADD'},
+                                next_attr: {'value': True, 'action': 'PUT'},
+                            }
+        """
+        if attributes is not None and not isinstance(attributes, dict):
+            raise TypeError("the value of `attributes` is expected to be a dictionary")
+        if actions is not None and not isinstance(actions, list):
+            raise TypeError("the value of `actions` is expected to be a list")
+
+        self._conditional_operator_check(conditional_operator)
+        args, save_kwargs = self._get_save_args(null_check=False)
+        kwargs = {
+            pythonic(RETURN_VALUES):  ALL_NEW,
+            'conditional_operator': conditional_operator,
+        }
+
+        if attributes:
+            kwargs[pythonic(ATTR_UPDATES)] = {}
+
+        if pythonic(RANGE_KEY) in save_kwargs:
+            kwargs[pythonic(RANGE_KEY)] = save_kwargs[pythonic(RANGE_KEY)]
+
+        if expected_values:
+            kwargs['expected'] = self._build_expected_values(expected_values, UPDATE_FILTER_OPERATOR_MAP)
+
+        attrs = self._get_attributes()
+        attributes = attributes or {}
+        for attr, params in attributes.items():
+            attribute_cls = attrs[attr]
+            action = params['action'] and params['action'].upper()
+            attr_values = {ACTION: action}
+            if 'value' in params:
+                attr_values[VALUE] = self._serialize_value(attribute_cls, params['value'])
+
+            kwargs[pythonic(ATTR_UPDATES)][attribute_cls.attr_name] = attr_values
+
+        kwargs.update(condition=condition)
+        kwargs.update(actions=actions)
+        data = await self._get_connection().update_item(*args, **kwargs)
+        for name, value in data[ATTRIBUTES].items():
+            attr_name = self._dynamo_to_python_attr(name)
+            attr = self._get_attributes().get(attr_name)
+            if attr:
+                setattr(self, attr_name, attr.deserialize(value.get(ATTR_TYPE_MAP[attr.attr_type])))
+        return data
 
     @classmethod
     async def from_raw_data(cls, data):

@@ -7,7 +7,7 @@ from tests.test_mockup_model import TestModelSync, TestModelAsync
 
 
 def sync_main():
-    for i in range(10000):
+    for i in range(10):
         temp_id = i
         name = ''.join(random.choice('0123456789ABCDEF') for i in range(16))
 
@@ -20,7 +20,7 @@ async def async_main():
     _start_time = time.time()
     print("ASYNC_MAIN: Starts at " + str(_start_time))
 
-    for i in range(10000):
+    for i in range(10):
         temp_id = i
         name = ''.join(random.choice('0123456789ABCDEF') for i in range(16))
 

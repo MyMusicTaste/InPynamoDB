@@ -37,6 +37,34 @@ class TableConnection(PynamoDBTableConnection):
             return_consumed_capacity=return_consumed_capacity,
             return_item_collection_metrics=return_item_collection_metrics)
 
+    async def update_item(self,
+                          hash_key,
+                          range_key=None,
+                          actions=None,
+                          attribute_updates=None,
+                          condition=None,
+                          expected=None,
+                          conditional_operator=None,
+                          return_consumed_capacity=None,
+                          return_item_collection_metrics=None,
+                          return_values=None
+                          ):
+        """
+        Performs the UpdateItem operation
+        """
+        return await self.connection.update_item(
+            self.table_name,
+            hash_key,
+            range_key=range_key,
+            actions=actions,
+            attribute_updates=attribute_updates,
+            condition=condition,
+            expected=expected,
+            conditional_operator=conditional_operator,
+            return_consumed_capacity=return_consumed_capacity,
+            return_item_collection_metrics=return_item_collection_metrics,
+            return_values=return_values)
+
     async def batch_write_item(self,
                                put_items=None,
                                delete_items=None,
@@ -87,6 +115,12 @@ class TableConnection(PynamoDBTableConnection):
             scan_index_forward=scan_index_forward,
             conditional_operator=conditional_operator,
             select=select)
+
+    async def delete_table(self):
+        """
+        Performs the DeleteTable operation and returns the result
+        """
+        return await self.connection.delete_table(self.table_name)
 
     async def describe_table(self):
         """

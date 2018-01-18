@@ -19,10 +19,12 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, STREAM_SPECIFICATION, STREAM_ENABLED, STREAM_VIEW_TYPE, \
     TABLE_KEY, KEY, COMPARISON_OPERATOR, COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, ATTR_VALUE_LIST, \
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
-    SCAN_INDEX_FORWARD, QUERY
-from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist, QueryError
+    SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
+    UPDATE_ITEM
+from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist, QueryError, UpdateError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
+from pynamodb.expressions.update import Update
 
 from pynamodb_async.settings import get_settings_value
 
@@ -348,6 +350,95 @@ class AsyncConnection(base.Connection):
             return await self.dispatch(PUT_ITEM, operation_kwargs)
         except BOTOCORE_EXCEPTIONS as e:
             raise PutError("Failed to put item: {0}".format(e), e)
+
+    async def update_item(self,
+                          table_name,
+                          hash_key,
+                          range_key=None,
+                          actions=None,
+                          attribute_updates=None,
+                          condition=None,
+                          expected=None,
+                          return_consumed_capacity=None,
+                          conditional_operator=None,
+                          return_item_collection_metrics=None,
+                          return_values=None):
+        """
+        Performs the UpdateItem operation
+        """
+        self._check_actions(actions, attribute_updates)
+        self._check_condition('condition', condition, expected, conditional_operator)
+
+        operation_kwargs = {TABLE_NAME: table_name}
+        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key))
+        name_placeholders = {}
+        expression_attribute_values = {}
+
+        if condition is not None:
+            condition_expression = condition.serialize(name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if return_item_collection_metrics:
+            operation_kwargs.update(self.get_item_collection_map(return_item_collection_metrics))
+        if return_values:
+            operation_kwargs.update(self.get_return_values_map(return_values))
+        if not actions and not attribute_updates:
+            raise ValueError("{0} cannot be empty".format(ATTR_UPDATES))
+        actions = actions or []
+        attribute_updates = attribute_updates or {}
+
+        update_expression = Update(*actions)
+        # We sort the keys here for determinism. This is mostly done to simplify testing.
+        for key in sorted(attribute_updates.keys()):
+            path = Path([key])
+            update = attribute_updates[key]
+            action = update.get(ACTION)
+            if action not in ATTR_UPDATE_ACTIONS:
+                raise ValueError("{0} must be one of {1}".format(ACTION, ATTR_UPDATE_ACTIONS))
+            value = update.get(VALUE)
+            attr_type, value = self.parse_attribute(value, return_type=True)
+            if attr_type is None and action != DELETE:
+                attr_type = self.get_attribute_type(table_name, key, value)
+            value = {attr_type: value}
+            if action == DELETE:
+                action = path.remove() if attr_type is None else path.delete(value)
+            elif action == PUT:
+                action = path.set(value)
+            else:
+                action = path.add(value)
+            update_expression.add_action(action)
+        operation_kwargs[UPDATE_EXPRESSION] = update_expression.serialize(name_placeholders,
+                                                                          expression_attribute_values)
+
+        # We read the conditional operator even without expected passed in to maintain existing behavior.
+        conditional_operator = self.get_conditional_operator(conditional_operator or AND)
+        if expected:
+            condition_expression = self._get_condition_expression(
+                table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        if expression_attribute_values:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_VALUES] = expression_attribute_values
+
+        try:
+            return await self.dispatch(UPDATE_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise UpdateError("Failed to update item: {0}".format(e), e)
+
+    async def delete_table(self, table_name):
+        """
+        Performs the DeleteTable operation
+        """
+        operation_kwargs = {
+            TABLE_NAME: table_name
+        }
+        try:
+            data = await self.dispatch(DELETE_TABLE, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise TableError("Failed to delete table: {0}".format(e), e)
+        return data
 
     async def create_table(self,
                            table_name,

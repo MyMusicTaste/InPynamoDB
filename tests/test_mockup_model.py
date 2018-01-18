@@ -3,7 +3,7 @@ import asyncio
 import time
 
 import aiohttp
-from pynamodb.attributes import NumberAttribute, UnicodeAttribute
+from pynamodb.attributes import NumberAttribute, UnicodeAttribute, ListAttribute
 
 from tests import test_settings as settings
 
@@ -35,3 +35,25 @@ class TestModelSync(PynamoDBModel):
                 self.create_table(read_capacity_units=3, write_capacity_units=3)
 
             super(TestModelSync, self).__init__(hash_key, range_key, **attributes)
+
+
+class TestComplexModelAsync(Model):
+    class Meta:
+        table_name = 'test_complex_model_async'
+        host = settings.DYNAMODB_HOST
+
+    id = NumberAttribute(hash_key=True)
+    list_attr = ListAttribute(default=[])
+    name = UnicodeAttribute()
+    description = UnicodeAttribute()
+
+
+class TestComplexModelSync(PynamoDBModel):
+    class Meta:
+        table_name = 'test_complex_model_sync'
+        host = settings.DYNAMODB_HOST
+
+    id = NumberAttribute(hash_key=True)
+    list_attr = ListAttribute(default=[])
+    name = UnicodeAttribute()
+    description = UnicodeAttribute()
