@@ -1,4 +1,4 @@
-# PynamoDB_async
+# InPynamoDB
 This transforms [PynamoDB](https://github.com/pynamodb/PynamoDB)'s basic methods working asynchronously.
 
 ## Requirements
