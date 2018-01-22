@@ -4,12 +4,15 @@ import json
 import logging
 import warnings
 
+import six
 from pynamodb.attributes import AttributeContainerMeta, Attribute
 from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.exceptions import TableDoesNotExist, DoesNotExist
 from pynamodb.indexes import Index
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta
+from pynamodb.types import RANGE, HASH
+
 from inpynamodb.pagination import ResultIterator
 from pynamodb.compat import NullHandler
 
@@ -172,7 +175,6 @@ class MetaModel(AttributeContainerMeta):
 
 
 class Model(PynamoDBModel):
-    # TODO Check CRUD first
     def __init__(self, **attributes):
         if 'cls' not in inspect.stack()[1][0].f_locals or \
                 inspect.stack()[1][0].f_locals['cls'].__class__.__name__ != 'MetaModel' or \
@@ -180,6 +182,20 @@ class Model(PynamoDBModel):
             raise InvalidUsageException("You should declare a model with create() factory method.")
 
         super().__init__(**attributes)
+
+    def __repr__(self):
+        """
+        Temporary method since __repr__ does not support async
+        """
+        if self.Meta.table_name:
+            serialized = self._serialize(null_check=False)
+
+            if serialized.get(RANGE):
+                msg = "{0}<{1}, {2}>".format(self.Meta.table_name, serialized.get(HASH), serialized.get(RANGE))
+            else:
+                msg = "{0}<{1}".format(self.Meta.table_name, serialized.get(HASH))
+
+            return six.u(msg)
 
     @classmethod
     async def create(cls, hash_key=None, range_key=None, **attributes):
