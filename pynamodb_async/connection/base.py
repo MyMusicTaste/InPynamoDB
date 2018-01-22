@@ -1,12 +1,6 @@
-import asyncio
 import logging
-import random
-
-import time
 from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
-from botocore.vendored import requests
-from botocore.vendored.requests import Request
 from pynamodb.compat import NullHandler
 
 from pynamodb.connection import base
@@ -20,8 +14,8 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     TABLE_KEY, KEY, COMPARISON_OPERATOR, COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, ATTR_VALUE_LIST, \
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
     SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
-    UPDATE_ITEM
-from pynamodb.exceptions import PutError, TableError, VerboseClientError, TableDoesNotExist, QueryError, UpdateError
+    UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN
+from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, ScanError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
@@ -33,7 +27,6 @@ log.addHandler(NullHandler())
 
 
 class AsyncConnection(base.Connection):
-    # TODO need to override my methods
     def __init__(self, region=None, host=None, session_cls=None, request_timeout_seconds=None, max_retry_attempts=None,
                  base_backoff_ms=None):
         self._tables = {}
@@ -249,6 +242,105 @@ class AsyncConnection(base.Connection):
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
 
+    async def scan(self,
+                   table_name,
+                   filter_condition=None,
+                   attributes_to_get=None,
+                   limit=None,
+                   conditional_operator=None,
+                   scan_filter=None,
+                   return_consumed_capacity=None,
+                   exclusive_start_key=None,
+                   segment=None,
+                   total_segments=None,
+                   consistent_read=None):
+        """
+        Performs the scan operation
+        """
+        self._check_condition('filter_condition', filter_condition, scan_filter, conditional_operator)
+
+        operation_kwargs = {TABLE_NAME: table_name}
+        name_placeholders = {}
+        expression_attribute_values = {}
+
+        if filter_condition is not None:
+            filter_expression = filter_condition.serialize(name_placeholders, expression_attribute_values)
+            operation_kwargs[FILTER_EXPRESSION] = filter_expression
+        if attributes_to_get is not None:
+            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
+            operation_kwargs[PROJECTION_EXPRESSION] = projection_expression
+        if limit is not None:
+            operation_kwargs[LIMIT] = limit
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if exclusive_start_key:
+            operation_kwargs.update(await self.get_exclusive_start_key_map(table_name, exclusive_start_key))
+        if segment is not None:
+            operation_kwargs[SEGMENT] = segment
+        if total_segments:
+            operation_kwargs[TOTAL_SEGMENTS] = total_segments
+        if scan_filter:
+            conditional_operator = self.get_conditional_operator(conditional_operator or AND)
+            filter_expression = self._get_filter_expression(
+                table_name, scan_filter, conditional_operator, name_placeholders, expression_attribute_values)
+            operation_kwargs[FILTER_EXPRESSION] = filter_expression
+        if consistent_read:
+            operation_kwargs[CONSISTENT_READ] = consistent_read
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        if expression_attribute_values:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_VALUES] = expression_attribute_values
+
+        try:
+            return await self.dispatch(SCAN, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise ScanError("Failed to scan table: {0}".format(e), e)
+
+    async def delete_item(self,
+                          table_name,
+                          hash_key,
+                          range_key=None,
+                          condition=None,
+                          expected=None,
+                          conditional_operator=None,
+                          return_values=None,
+                          return_consumed_capacity=None,
+                          return_item_collection_metrics=None):
+        """
+        Performs the DeleteItem operation and returns the result
+        """
+        self._check_condition('condition', condition, expected, conditional_operator)
+
+        operation_kwargs = {TABLE_NAME: table_name}
+        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key))
+        name_placeholders = {}
+        expression_attribute_values = {}
+
+        if condition is not None:
+            condition_expression = condition.serialize(name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if return_values:
+            operation_kwargs.update(self.get_return_values_map(return_values))
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if return_item_collection_metrics:
+            operation_kwargs.update(self.get_item_collection_map(return_item_collection_metrics))
+        # We read the conditional operator even without expected passed in to maintain existing behavior.
+        conditional_operator = self.get_conditional_operator(conditional_operator or AND)
+        if expected:
+            condition_expression = self._get_condition_expression(
+                table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
+            operation_kwargs[CONDITION_EXPRESSION] = condition_expression
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        if expression_attribute_values:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_VALUES] = expression_attribute_values
+
+        try:
+            return await self.dispatch(DELETE_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise DeleteError("Failed to delete item: {0}".format(e), e)
+
     async def get_identifier_map(self, table_name, hash_key, range_key=None, key=KEY):
         """
         Builds the identifier map that is common to several operations
@@ -399,7 +491,7 @@ class AsyncConnection(base.Connection):
             value = update.get(VALUE)
             attr_type, value = self.parse_attribute(value, return_type=True)
             if attr_type is None and action != DELETE:
-                attr_type = self.get_attribute_type(table_name, key, value)
+                attr_type = await self.get_attribute_type(table_name, key, value)
             value = {attr_type: value}
             if action == DELETE:
                 action = path.remove() if attr_type is None else path.delete(value)
@@ -524,19 +616,3 @@ class AsyncConnection(base.Connection):
         if not self._client or (self._client._request_signer and not self._client._request_signer._credentials):
             self._client = self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host)
         return self._client
-
-    def _create_prepared_request(self, request_dict, operation_model):
-        boto_prepared_request = self.client._endpoint.create_request(request_dict, operation_model)
-
-        # The call requests_session.send(final_prepared_request) ignores the headers which are
-        # part of the request session. In order to include the requests session headers inside
-        # the request, we create a new request object, and call prepare_request with the newly
-        # created request object
-        raw_request_with_params = Request(
-            boto_prepared_request.method,
-            boto_prepared_request.url,
-            data=boto_prepared_request.body,
-            headers=boto_prepared_request.headers
-        )
-
-        return self.requests_session.prepare_request(raw_request_with_params)

@@ -65,6 +65,55 @@ class TableConnection(PynamoDBTableConnection):
             return_item_collection_metrics=return_item_collection_metrics,
             return_values=return_values)
 
+    async def scan(self,
+                   filter_condition=None,
+                   attributes_to_get=None,
+                   limit=None,
+                   conditional_operator=None,
+                   scan_filter=None,
+                   return_consumed_capacity=None,
+                   segment=None,
+                   total_segments=None,
+                   exclusive_start_key=None,
+                   consistent_read=None):
+        """
+        Performs the scan operation
+        """
+        return await self.connection.scan(
+            self.table_name,
+            filter_condition=filter_condition,
+            attributes_to_get=attributes_to_get,
+            limit=limit,
+            conditional_operator=conditional_operator,
+            scan_filter=scan_filter,
+            return_consumed_capacity=return_consumed_capacity,
+            segment=segment,
+            total_segments=total_segments,
+            exclusive_start_key=exclusive_start_key,
+            consistent_read=consistent_read)
+
+    async def delete_item(self, hash_key,
+                          range_key=None,
+                          condition=None,
+                          expected=None,
+                          conditional_operator=None,
+                          return_values=None,
+                          return_consumed_capacity=None,
+                          return_item_collection_metrics=None):
+        """
+        Performs the DeleteItem operation and returns the result
+        """
+        return await self.connection.delete_item(
+            self.table_name,
+            hash_key,
+            range_key=range_key,
+            condition=condition,
+            expected=expected,
+            conditional_operator=conditional_operator,
+            return_values=return_values,
+            return_consumed_capacity=return_consumed_capacity,
+            return_item_collection_metrics=return_item_collection_metrics)
+
     async def batch_write_item(self,
                                put_items=None,
                                delete_items=None,

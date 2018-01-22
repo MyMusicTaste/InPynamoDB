@@ -16,7 +16,7 @@ from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNIT
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
     ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
-    ATTR_TYPE_MAP
+    ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP
 from pynamodb_async.settings import get_settings_value
 
 
@@ -78,6 +78,7 @@ class Model(PynamoDBModel):
             raise InvalidUsageException("You should declare a model with create() factory method.")
 
         super().__init__(**attributes)
+
 
     @classmethod
     async def create(cls, hash_key=None, range_key=None, **attributes):
@@ -357,6 +358,74 @@ class Model(PynamoDBModel):
         )
 
         return iterator
+
+    @classmethod
+    def scan(cls,
+             filter_condition=None,
+             segment=None,
+             total_segments=None,
+             limit=None,
+             conditional_operator=None,
+             last_evaluated_key=None,
+             page_size=None,
+             consistent_read=None,
+             **filters):
+        """
+        Iterates through all items in the table
+
+        :param filter_condition: Condition used to restrict the scan results
+        :param segment: If set, then scans the segment
+        :param total_segments: If set, then specifies total segments
+        :param limit: Used to limit the number of results returned
+        :param conditional_operator:
+        :param last_evaluated_key: If set, provides the starting point for scan.
+        :param page_size: Page size of the scan to DynamoDB
+        :param filters: A list of item filters
+        :param consistent_read: If True, a consistent read is performed
+        """
+        cls._conditional_operator_check(conditional_operator)
+        key_filter, scan_filter = cls._build_filters(
+            SCAN_OPERATOR_MAP,
+            non_key_operator_map=SCAN_OPERATOR_MAP,
+            key_attribute_classes=cls._get_attributes(),
+            filters=filters
+        )
+        key_filter.update(scan_filter)
+
+        if page_size is None:
+            page_size = limit
+
+        scan_args = ()
+        scan_kwargs = dict(
+            filter_condition=filter_condition,
+            exclusive_start_key=last_evaluated_key,
+            segment=segment,
+            limit=page_size,
+            scan_filter=key_filter,
+            total_segments=total_segments,
+            conditional_operator=conditional_operator,
+            consistent_read=consistent_read
+        )
+
+        return ResultIterator(
+            cls._get_connection().scan,
+            scan_args,
+            scan_kwargs,
+            map_fn=cls.from_raw_data,
+            limit=limit
+        )
+
+    async def delete(self, condition=None, conditional_operator=None, **expected_values):
+        """
+        Deletes this object from dynamodb
+        """
+        self._conditional_operator_check(conditional_operator)
+        args, kwargs = self._get_save_args(attributes=False, null_check=False)
+        if len(expected_values):
+            kwargs.update(expected=self._build_expected_values(expected_values, DELETE_FILTER_OPERATOR_MAP))
+        kwargs.update(conditional_operator=conditional_operator)
+        kwargs.update(condition=condition)
+        return await self._get_connection().delete_item(*args, **kwargs)
 
     @classmethod
     async def exists(cls):
