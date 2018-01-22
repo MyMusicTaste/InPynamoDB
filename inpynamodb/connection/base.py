@@ -22,7 +22,7 @@ from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
 
-from pynamodb_async.settings import get_settings_value
+from inpynamodb.settings import get_settings_value
 
 log = logging.getLogger(__name__)
 log.addHandler(NullHandler())

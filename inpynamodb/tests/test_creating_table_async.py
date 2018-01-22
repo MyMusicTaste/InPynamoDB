@@ -4,7 +4,7 @@ import uuid
 
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute
 
-from pynamodb_async.models import Model
+from inpynamodb.models import Model
 import tests.test_settings as settings
 
 

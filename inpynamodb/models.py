@@ -4,25 +4,24 @@ import json
 import logging
 import warnings
 
-from botocore.vendored.six import add_metaclass
 from pynamodb.attributes import AttributeContainerMeta, Attribute
 from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.exceptions import TableDoesNotExist, DoesNotExist
 from pynamodb.indexes import Index
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta
-from pynamodb_async.pagination import ResultIterator
+from inpynamodb.pagination import ResultIterator
 from pynamodb.compat import NullHandler
 
-from pynamodb_async.connection.table import TableConnection
-from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, \
+from inpynamodb.connection.table import TableConnection
+from inpynamodb.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, \
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
     ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
     ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT, BATCH_WRITE_PAGE_LIMIT, PUT, \
     DELETE, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, DELETE_REQUEST, KEY, BATCH_GET_PAGE_LIMIT, RESPONSES, \
     UNPROCESSED_KEYS, KEYS
-from pynamodb_async.settings import get_settings_value
+from inpynamodb.settings import get_settings_value
 
 log = logging.getLogger(__name__)
 log.addHandler(NullHandler())

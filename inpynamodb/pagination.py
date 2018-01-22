@@ -1,6 +1,4 @@
-from asyncio import get_event_loop
-
-from pynamodb_async.constants import CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY
+from inpynamodb.constants import CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY
 
 
 class ResultIterator(object):

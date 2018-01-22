@@ -1,4 +1,4 @@
-from pynamodb_async.connection.base import AsyncConnection
+from inpynamodb.connection.base import AsyncConnection
 from pynamodb.connection.table import TableConnection as PynamoDBTableConnection
 
 

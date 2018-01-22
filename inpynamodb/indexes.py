@@ -4,7 +4,7 @@ from pynamodb.types import HASH, RANGE
 from six import with_metaclass
 
 from pynamodb.attributes import Attribute
-from pynamodb_async.constants import META_CLASS_NAME, ATTR_NAME, ATTR_TYPE, ATTR_TYPE_MAP, KEY_TYPE, KEY_SCHEMA, \
+from inpynamodb.constants import META_CLASS_NAME, ATTR_NAME, ATTR_TYPE, ATTR_TYPE_MAP, KEY_TYPE, KEY_SCHEMA, \
     ATTR_DEFINITIONS
 
 

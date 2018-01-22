@@ -5,8 +5,8 @@ install_requires = [
 ]
 
 setup(
-    name='pynamodb_async',
-    version=__import__('pynamodb_async').__version__,
+    name='InPynamoDB',
+    version=__import__('inpynamodb').__version__,
     packages=find_packages(),
     author='Sunghyun Lee',
     author_email='jolacaleb@gmail.com',

@@ -4,7 +4,6 @@ import os
 from os import getenv
 
 import aiobotocore
-import aiohttp
 
 log = logging.getLogger(__name__)
 os.environ["PYNAMODB_CONFIG"] = os.path.dirname(os.path.abspath(__file__))
