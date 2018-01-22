@@ -14,7 +14,8 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     TABLE_KEY, KEY, COMPARISON_OPERATOR, COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, ATTR_VALUE_LIST, \
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
     SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
-    UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN
+    UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN, DELETE_REQUEST, REQUEST_ITEMS, BATCH_WRITE_ITEM, \
+    PUT_REQUEST
 from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, ScanError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
@@ -241,6 +242,44 @@ class AsyncConnection(base.Connection):
                 capacity = capacity.get(CAPACITY_UNITS)
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
+
+    async def batch_write_item(self,
+                               table_name,
+                               put_items=None,
+                               delete_items=None,
+                               return_consumed_capacity=None,
+                               return_item_collection_metrics=None):
+        """
+        Performs the batch_write_item operation
+        """
+        if put_items is None and delete_items is None:
+            raise ValueError("Either put_items or delete_items must be specified")
+        operation_kwargs = {
+            REQUEST_ITEMS: {
+                table_name: []
+            }
+        }
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if return_item_collection_metrics:
+            operation_kwargs.update(self.get_item_collection_map(return_item_collection_metrics))
+        put_items_list = []
+        if put_items:
+            for item in put_items:
+                put_items_list.append({
+                    PUT_REQUEST: await self.get_item_attribute_map(table_name, item, pythonic_key=False)
+                })
+        delete_items_list = []
+        if delete_items:
+            for item in delete_items:
+                delete_items_list.append({
+                    DELETE_REQUEST: await self.get_item_attribute_map(table_name, item, item_key=KEY, pythonic_key=False)
+                })
+        operation_kwargs[REQUEST_ITEMS][table_name] = delete_items_list + put_items_list
+        try:
+            return await self.dispatch(BATCH_WRITE_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise PutError("Failed to batch write items: {0}".format(e), e)
 
     async def scan(self,
                    table_name,

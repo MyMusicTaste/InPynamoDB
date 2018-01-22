@@ -1,5 +1,6 @@
 import copy
 import inspect
+import logging
 import warnings
 
 from botocore.vendored.six import add_metaclass
@@ -10,18 +11,121 @@ from pynamodb.exceptions import TableDoesNotExist, DoesNotExist
 from pynamodb.indexes import Index
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta
 from pynamodb_async.pagination import ResultIterator
+from pynamodb.compat import NullHandler
 
 from pynamodb_async.connection.table import TableConnection
 from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, \
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
     ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
-    ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT
+    ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT, BATCH_WRITE_PAGE_LIMIT, PUT, \
+    DELETE, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, DELETE_REQUEST, KEY
 from pynamodb_async.settings import get_settings_value
+
+log = logging.getLogger(__name__)
+log.addHandler(NullHandler())
 
 
 class InvalidUsageException(Exception):
     pass
+
+
+class ModelContextManager(object):
+    """
+    A class for managing batch operations
+
+    """
+
+    def __init__(self, model, auto_commit=True):
+        self.model = model
+        self.auto_commit = auto_commit
+        self.max_operations = BATCH_WRITE_PAGE_LIMIT
+        self.pending_operations = []
+
+    def __enter__(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+
+class BatchWrite(ModelContextManager):
+    """
+    A class for batch writes
+    """
+    async def save(self, put_item):
+        """
+        This adds `put_item` to the list of pending writes to be performed.
+        Additionally, the a BatchWriteItem will be performed if the length of items
+        reaches 25.
+
+        :param put_item: Should be an instance of a `Model` to be written
+        """
+        if len(self.pending_operations) == self.max_operations:
+            if not self.auto_commit:
+                raise ValueError("DynamoDB allows a maximum of 25 batch operations")
+            else:
+                await self.commit()
+        self.pending_operations.append({"action": PUT, "item": put_item})
+
+    async def delete(self, del_item):
+        """
+        This adds `del_item` to the list of pending deletes to be performed.
+        If the list of items reaches 25, a BatchWriteItem will be called.
+
+        :param del_item: Should be an instance of a `Model` to be deleted
+        """
+        if len(self.pending_operations) == self.max_operations:
+            if not self.auto_commit:
+                raise ValueError("DynamoDB allows a maximum of 25 batch operations")
+            else:
+                await self.commit()
+        self.pending_operations.append({"action": DELETE, "item": del_item})
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        This ensures that all pending operations are committed when
+        the context is exited
+        """
+        return await self.commit()
+
+    async def commit(self):
+        """
+        Writes all of the changes that are pending
+        """
+        log.debug("%s committing batch operation", self.model)
+        put_items = []
+        delete_items = []
+        attrs_name = pythonic(ATTRIBUTES)
+        for item in self.pending_operations:
+            if item['action'] == PUT:
+                put_items.append(item['item']._serialize(attr_map=True)[attrs_name])
+            elif item['action'] == DELETE:
+                delete_items.append(item['item']._get_keys())
+        self.pending_operations = []
+        if not len(put_items) and not len(delete_items):
+            return
+        data = await self.model._get_connection().batch_write_item(
+            put_items=put_items,
+            delete_items=delete_items
+        )
+        if data is None:
+            return
+        unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
+        while unprocessed_items:
+            put_items = []
+            delete_items = []
+            for item in unprocessed_items:
+                if PUT_REQUEST in item:
+                    put_items.append(item.get(PUT_REQUEST).get(ITEM))
+                elif DELETE_REQUEST in item:
+                    delete_items.append(item.get(DELETE_REQUEST).get(KEY))
+            log.info("Resending %s unprocessed keys for batch operation", len(unprocessed_items))
+            data = await self.model._get_connection().batch_write_item(
+                put_items=put_items,
+                delete_items=delete_items
+            )
+            unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
 
 
 class MetaModel(AttributeContainerMeta):
@@ -490,6 +594,15 @@ class Model(PynamoDBModel):
             map_fn=cls.from_raw_data,
             limit=limit
         )
+
+    @classmethod
+    def batch_write(cls, auto_commit=True):
+        """
+        Returns a context manager for a batch operation'
+
+        :param auto_commit: Commits writes automatically if `True`
+        """
+        return BatchWrite(cls, auto_commit=auto_commit)
 
     async def delete(self, condition=None, conditional_operator=None, **expected_values):
         """

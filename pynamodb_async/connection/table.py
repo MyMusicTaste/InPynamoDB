@@ -37,6 +37,21 @@ class TableConnection(PynamoDBTableConnection):
             return_consumed_capacity=return_consumed_capacity,
             return_item_collection_metrics=return_item_collection_metrics)
 
+    async def batch_write_item(self,
+                               put_items=None,
+                               delete_items=None,
+                               return_consumed_capacity=None,
+                               return_item_collection_metrics=None):
+        """
+        Performs the batch_write_item operation
+        """
+        return await self.connection.batch_write_item(
+            self.table_name,
+            put_items=put_items,
+            delete_items=delete_items,
+            return_consumed_capacity=return_consumed_capacity,
+            return_item_collection_metrics=return_item_collection_metrics)
+
     async def update_item(self,
                           hash_key,
                           range_key=None,
