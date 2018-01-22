@@ -16,7 +16,7 @@ from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNIT
     STREAM_VIEW_TYPE, STREAM_SPECIFICATION, STREAM_ENABLED, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, \
     ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
-    ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP
+    ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT
 from pynamodb_async.settings import get_settings_value
 
 
@@ -79,7 +79,6 @@ class Model(PynamoDBModel):
 
         super().__init__(**attributes)
 
-
     @classmethod
     async def create(cls, hash_key=None, range_key=None, **attributes):
         if hash_key is not None:
@@ -100,6 +99,13 @@ class Model(PynamoDBModel):
         Delete the table for this model
         """
         return await cls._get_connection().delete_table()
+
+    @classmethod
+    async def describe_table(cls):
+        """
+        Returns the result of a DescribeTable operation on this model's table
+        """
+        return await cls._get_connection().describe_table()
 
     @classmethod
     async def create_table(cls, wait=False, read_capacity_units=None, write_capacity_units=None):
@@ -139,7 +145,8 @@ class Model(PynamoDBModel):
 
             return result
 
-    async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None, **expected_values):
+    async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None,
+                          **expected_values):
         """
         Updates an item using the UpdateItem operation.
 
@@ -209,7 +216,7 @@ class Model(PynamoDBModel):
         self._conditional_operator_check(conditional_operator)
         args, save_kwargs = self._get_save_args(null_check=False)
         kwargs = {
-            pythonic(RETURN_VALUES):  ALL_NEW,
+            pythonic(RETURN_VALUES): ALL_NEW,
             'conditional_operator': conditional_operator,
         }
 
@@ -276,6 +283,75 @@ class Model(PynamoDBModel):
             if attr:
                 kwargs[attr_name] = attr.deserialize(attr.get_value(value))
         return await cls.create(*args, **kwargs)
+
+    @classmethod
+    async def count(cls,
+                    hash_key=None,
+                    range_key_condition=None,
+                    filter_condition=None,
+                    consistent_read=False,
+                    index_name=None,
+                    limit=None,
+                    **filters):
+        """
+        Provides a filtered count
+
+        :param hash_key: The hash key to query. Can be None.
+        :param range_key_condition: Condition for range key
+        :param filter_condition: Condition used to restrict the query results
+        :param consistent_read: If True, a consistent read is performed
+        :param index_name: If set, then this index is used
+        :param filters: A dictionary of filters to be used in the query. Requires a hash_key to be passed.
+        """
+        if hash_key is None:
+            if filters:
+                raise ValueError('A hash_key must be given to use filters')
+            return (await cls.describe_table()).get(ITEM_COUNT)
+
+        cls._get_indexes()
+        if index_name:
+            hash_key = cls._index_classes[index_name]._hash_key_attribute().serialize(hash_key)
+            key_attribute_classes = cls._index_classes[index_name]._get_attributes()
+            non_key_attribute_classes = cls._get_attributes()
+        else:
+            hash_key = await cls._serialize_keys(hash_key)[0]
+            non_key_attribute_classes = dict(cls._get_attributes())
+            key_attribute_classes = dict(cls._get_attributes())
+            for name, attr in cls._get_attributes().items():
+                if attr.is_range_key or attr.is_hash_key:
+                    key_attribute_classes[name] = attr
+                else:
+                    non_key_attribute_classes[name] = attr
+        key_conditions, query_filters = cls._build_filters(
+            QUERY_OPERATOR_MAP,
+            non_key_operator_map=QUERY_FILTER_OPERATOR_MAP,
+            key_attribute_classes=key_attribute_classes,
+            non_key_attribute_classes=non_key_attribute_classes,
+            filters=filters)
+
+        query_args = (hash_key,)
+        query_kwargs = dict(
+            range_key_condition=range_key_condition,
+            filter_condition=filter_condition,
+            index_name=index_name,
+            consistent_read=consistent_read,
+            key_conditions=key_conditions,
+            query_filters=query_filters,
+            limit=limit,
+            select=COUNT
+        )
+
+        result_iterator = ResultIterator(
+            cls._get_connection().query,
+            query_args,
+            query_kwargs,
+            limit=limit
+        )
+
+        # iterate through results
+        list(i async for i in result_iterator)
+
+        return result_iterator.total_count
 
     @classmethod
     async def query(cls,
