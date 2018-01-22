@@ -37,6 +37,17 @@ class TableConnection(PynamoDBTableConnection):
             return_consumed_capacity=return_consumed_capacity,
             return_item_collection_metrics=return_item_collection_metrics)
 
+    async def batch_get_item(self, keys, consistent_read=None, return_consumed_capacity=None, attributes_to_get=None):
+        """
+        Performs the batch get item operation
+        """
+        return await self.connection.batch_get_item(
+            self.table_name,
+            keys,
+            consistent_read=consistent_read,
+            return_consumed_capacity=return_consumed_capacity,
+            attributes_to_get=attributes_to_get)
+
     async def batch_write_item(self,
                                put_items=None,
                                delete_items=None,

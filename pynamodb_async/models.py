@@ -1,5 +1,6 @@
 import copy
 import inspect
+import json
 import logging
 import warnings
 
@@ -19,7 +20,8 @@ from pynamodb_async.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNIT
     ATTR_DEFINITIONS, ATTR_NAME, QUERY_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, META_CLASS_NAME, REGION, HOST, \
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
     ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT, BATCH_WRITE_PAGE_LIMIT, PUT, \
-    DELETE, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, DELETE_REQUEST, KEY
+    DELETE, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, DELETE_REQUEST, KEY, BATCH_GET_PAGE_LIMIT, RESPONSES, \
+    UNPROCESSED_KEYS, KEYS
 from pynamodb_async.settings import get_settings_value
 
 log = logging.getLogger(__name__)
@@ -41,12 +43,6 @@ class ModelContextManager(object):
         self.auto_commit = auto_commit
         self.max_operations = BATCH_WRITE_PAGE_LIMIT
         self.pending_operations = []
-
-    def __enter__(self):
-        return self
-
-    async def __aenter__(self):
-        return self
 
 
 class BatchWrite(ModelContextManager):
@@ -81,6 +77,9 @@ class BatchWrite(ModelContextManager):
             else:
                 await self.commit()
         self.pending_operations.append({"action": DELETE, "item": del_item})
+
+    async def __aenter__(self):
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """
@@ -248,6 +247,14 @@ class Model(PynamoDBModel):
             )
 
             return result
+
+    @classmethod
+    async def loads(cls, data):
+        content = json.loads(data)
+        async with cls.batch_write() as batch:
+            for item_data in content:
+                item = cls._from_data(item_data)
+                await batch.save(item)
 
     async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None,
                           **expected_values):
@@ -596,6 +603,59 @@ class Model(PynamoDBModel):
         )
 
     @classmethod
+    async def batch_get(cls, items, consistent_Read=None, attributes_to_get=None):
+        """
+        BatchGetItem for this model
+
+        :param items: Should be a list of hash keys to retrieve, or a list of
+            tuples if range keys are used.
+        """
+        items = list(items)
+        hash_keyname = (await cls._get_meta_data()).hash_keyname
+        range_keyname = (await cls._get_meta_data()).range_keyname
+        keys_to_get = []
+        while items:
+            if len(keys_to_get) == BATCH_GET_PAGE_LIMIT:
+                while keys_to_get:
+                    page, unprocessed_keys = cls._batch_get_page(
+                        keys_to_get,
+                        consistent_read=consistent_Read,
+                        attributes_to_get=attributes_to_get
+                    )
+                    for batch_item in page:
+                        yield await cls.from_raw_data(batch_item)
+                    if unprocessed_keys:
+                        keys_to_get = unprocessed_keys
+                    else:
+                        keys_to_get = []
+            item = items.pop()
+            if range_keyname:
+                hash_key, range_key = await cls._serialize_keys(item[0], item[1])
+                keys_to_get.append({
+                    hash_keyname: hash_key,
+                    range_keyname: range_key
+                })
+            else:
+                hash_key = await cls._serialize_keys(item)[0]
+                keys_to_get.append({
+                    hash_keyname: hash_key
+                })
+
+        while keys_to_get:
+            page, unprocessed_keys = cls._batch_get_page(
+                keys_to_get,
+                consistent_read=consistent_Read,
+                attributes_to_get=attributes_to_get
+            )
+            for batch_item in page:
+                yield cls.from_raw_data(batch_item)
+            if unprocessed_keys:
+                keys_to_get = unprocessed_keys
+            else:
+                keys_to_get = []
+
+
+    @classmethod
     def batch_write(cls, auto_commit=True):
         """
         Returns a context manager for a batch operation'
@@ -661,6 +721,24 @@ class Model(PynamoDBModel):
         attributes = cls._get_attributes()
         hash_keyname = (await cls._get_meta_data()).hash_keyname
         return attributes[cls._dynamo_to_python_attr(hash_keyname)]
+
+    @classmethod
+    async def _batch_get_page(cls, keys_to_get, consistent_read, attributes_to_get):
+        """
+        Returns a single page from BatchGetItem
+        Also returns any unprocessed items
+
+        :param keys_to_get: A list of keys
+        :param consistent_read: Whether or not this needs to be consistent
+        :param attributes_to_get: A list of attributes to return
+        """
+        log.debug("Fetching a BatchGetItem page")
+        data = await cls._get_connection().batch_get_item(
+            keys_to_get, consistent_read=consistent_read, attributes_to_get=attributes_to_get
+        )
+        item_data = data.get(RESPONSES).get(cls.Meta.table_name)
+        unprocessed_items = data.get(UNPROCESSED_KEYS).get(cls.Meta.table_name, {}).get(KEYS, None)
+        return item_data, unprocessed_items
 
     @classmethod
     async def _get_meta_data(cls):

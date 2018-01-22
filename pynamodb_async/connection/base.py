@@ -15,8 +15,9 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
     SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
     UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN, DELETE_REQUEST, REQUEST_ITEMS, BATCH_WRITE_ITEM, \
-    PUT_REQUEST
-from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, ScanError
+    PUT_REQUEST, KEYS, BATCH_GET_ITEM
+from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, \
+    ScanError, GetError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
@@ -273,7 +274,8 @@ class AsyncConnection(base.Connection):
         if delete_items:
             for item in delete_items:
                 delete_items_list.append({
-                    DELETE_REQUEST: await self.get_item_attribute_map(table_name, item, item_key=KEY, pythonic_key=False)
+                    DELETE_REQUEST: await self.get_item_attribute_map(table_name, item, item_key=KEY,
+                                                                      pythonic_key=False)
                 })
         operation_kwargs[REQUEST_ITEMS][table_name] = delete_items_list + put_items_list
         try:
@@ -432,6 +434,45 @@ class AsyncConnection(base.Connection):
             attributes,
             item_key=item_key,
             pythonic_key=pythonic_key)
+
+    async def batch_get_item(self,
+                             table_name,
+                             keys,
+                             consistent_read=None,
+                             return_consumed_capacity=None,
+                             attributes_to_get=None):
+        """
+        Performs the batch get item operation
+        """
+        operation_kwargs = {
+            REQUEST_ITEMS: {
+                table_name: {}
+            }
+        }
+
+        args_map = {}
+        name_placeholders = {}
+        if consistent_read:
+            args_map[CONSISTENT_READ] = consistent_read
+        if return_consumed_capacity:
+            operation_kwargs.update(self.get_consumed_capacity_map(return_consumed_capacity))
+        if attributes_to_get is not None:
+            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
+            args_map[PROJECTION_EXPRESSION] = projection_expression
+        if name_placeholders:
+            args_map[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        operation_kwargs[REQUEST_ITEMS][table_name].update(args_map)
+
+        keys_map = {KEYS: []}
+        for key in keys:
+            keys_map[KEYS].append(
+                await self.get_item_attribute_map(table_name, key)[ITEM]
+            )
+        operation_kwargs[REQUEST_ITEMS][table_name].update(keys_map)
+        try:
+            return await self.dispatch(BATCH_GET_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise GetError("Failed to batch get items: {0}".format(e), e)
 
     async def put_item(self,
                        table_name,
