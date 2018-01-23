@@ -73,7 +73,7 @@ UPDATE_EXPRESSION = 'UpdateExpression'
 
 # Defaults
 DEFAULT_ENCODING = 'utf-8'
-DEFAULT_REGION = 'us-east-1'
+DEFAULT_REGION = 'ap-northeast-2'
 DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 SERVICE_NAME = 'dynamodb'
 HTTP_OK = 200

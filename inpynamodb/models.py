@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import inspect
 import json
@@ -5,10 +6,11 @@ import logging
 import warnings
 
 import six
+import time
 from pynamodb.attributes import AttributeContainerMeta, Attribute
 from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
-from pynamodb.exceptions import TableDoesNotExist, DoesNotExist
+from pynamodb.exceptions import TableDoesNotExist, DoesNotExist, TableError
 from pynamodb.indexes import Index
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta
 from pynamodb.types import RANGE, HASH
@@ -23,7 +25,7 @@ from inpynamodb.constants import PUT_FILTER_OPERATOR_MAP, READ_CAPACITY_UNITS, W
     RETURN_VALUES, ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTRIBUTES, \
     ATTR_TYPE_MAP, SCAN_OPERATOR_MAP, DELETE_FILTER_OPERATOR_MAP, ITEM_COUNT, COUNT, BATCH_WRITE_PAGE_LIMIT, PUT, \
     DELETE, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, DELETE_REQUEST, KEY, BATCH_GET_PAGE_LIMIT, RESPONSES, \
-    UNPROCESSED_KEYS, KEYS
+    UNPROCESSED_KEYS, KEYS, TABLE_STATUS, ACTIVE
 from inpynamodb.settings import get_settings_value
 
 log = logging.getLogger(__name__)
@@ -228,7 +230,7 @@ class Model(PynamoDBModel):
     @classmethod
     async def create_table(cls, wait=False, read_capacity_units=None, write_capacity_units=None):
         """
-        :param wait: argument for making this method identical to PynamoDB, but not-used variable
+        :param wait: If set, then this call will block until the table is ready for use
         :param read_capacity_units: Sets the read capacity units for this table
         :param write_capacity_units: Sets the write capacity units for this table
         """
@@ -257,11 +259,21 @@ class Model(PynamoDBModel):
                 if attr_name not in attr_keys:
                     schema[pythonic(ATTR_DEFINITIONS)].append(attr)
                     attr_keys.append(attr_name)
-            result = await cls._get_connection().create_table(
+            cls._get_connection().create_table(
                 **schema
             )
 
-            return result
+            if wait:
+                while True:
+                    status = await cls._get_connection().describe_table()
+                    if status:
+                        data = status.get(TABLE_STATUS)
+                        if data == ACTIVE:
+                            return
+                        else:
+                            await asyncio.sleep(2)
+                    else:
+                        raise TableError("No TableStatus returned for table")
 
     @classmethod
     async def loads(cls, data):

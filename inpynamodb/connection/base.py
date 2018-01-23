@@ -15,7 +15,7 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
     SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
     UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN, DELETE_REQUEST, REQUEST_ITEMS, BATCH_WRITE_ITEM, \
-    PUT_REQUEST, KEYS, BATCH_GET_ITEM
+    PUT_REQUEST, KEYS, BATCH_GET_ITEM, EXCLUSIVE_START_TABLE_NAME
 from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, \
     ScanError, GetError
 from pynamodb.expressions.operand import Path
@@ -243,6 +243,9 @@ class AsyncConnection(base.Connection):
                 capacity = capacity.get(CAPACITY_UNITS)
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
+
+    async def _make_api_call(self, operation_name, operation_kwargs):
+        return await self.client._make_api_call(operation_name, operation_kwargs)
 
     async def batch_write_item(self,
                                table_name,
@@ -684,6 +687,23 @@ class AsyncConnection(base.Connection):
             raise TableError("Failed to create table: {0}".format(e), e)
         return data
 
+    async def list_tables(self, exclusive_start_table_name=None, limit=None):
+        """
+        Performs the ListTables operation
+        """
+        operation_kwargs = {}
+        if exclusive_start_table_name:
+            operation_kwargs.update({
+                EXCLUSIVE_START_TABLE_NAME: exclusive_start_table_name
+            })
+        if limit is not None:
+            operation_kwargs.update({
+                LIMIT: limit
+            })
+        try:
+            return await self.dispatch(LIST_TABLES, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise TableError("Unable to list tables: {0}".format(e), e)
     @property
     def client(self):
         """
