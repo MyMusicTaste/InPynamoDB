@@ -1,11 +1,15 @@
+"""
+PynamoDB Indexes
+"""
+from pynamodb.constants import (
+    INCLUDE, ALL, KEYS_ONLY, ATTR_NAME, ATTR_TYPE, KEY_TYPE, ATTR_TYPE_MAP, KEY_SCHEMA,
+    ATTR_DEFINITIONS, META_CLASS_NAME
+)
+from inpynamodb.attributes import Attribute
+from pynamodb.types import HASH, RANGE
 from pynamodb.compat import getmembers_issubclass
 from pynamodb.connection.util import pythonic
-from pynamodb.types import HASH, RANGE
 from six import with_metaclass
-
-from pynamodb.attributes import Attribute
-from inpynamodb.constants import META_CLASS_NAME, ATTR_NAME, ATTR_TYPE, ATTR_TYPE_MAP, KEY_TYPE, KEY_SCHEMA, \
-    ATTR_DEFINITIONS
 
 
 class IndexMeta(type):

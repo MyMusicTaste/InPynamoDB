@@ -1,12 +1,20 @@
+"""
+Lowest level connection
+"""
 import logging
+
+import math
+import warnings
+from base64 import b64decode
+
+import six
+import time
 from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
 
-from pynamodb.connection import base
-from pynamodb.connection.base import BOTOCORE_EXCEPTIONS, MetaTable
 from pynamodb.connection.util import pythonic
-from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESSION, EXPRESSION_ATTRIBUTE_NAMES, \
+from inpynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESSION, EXPRESSION_ATTRIBUTE_NAMES, \
     EXPRESSION_ATTRIBUTE_VALUES, PUT_ITEM, AND, DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE_TABLE, CREATE_TABLE, \
     RETURN_CONSUMED_CAPACITY, TOTAL, CONSUMED_CAPACITY, CAPACITY_UNITS, PROVISIONED_THROUGHPUT, READ_CAPACITY_UNITS, \
     WRITE_CAPACITY_UNITS, ATTR_NAME, ATTR_TYPE, ATTR_DEFINITIONS, INDEX_NAME, KEY_SCHEMA, PROJECTION, KEY_TYPE, \
@@ -15,20 +23,175 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, PROJECTION_EXPRESSION, CONSISTENT_READ, LIMIT, SELECT_VALUES, SELECT, \
     SCAN_INDEX_FORWARD, QUERY, ATTR_UPDATES, ACTION, ATTR_UPDATE_ACTIONS, VALUE, DELETE, UPDATE_EXPRESSION, PUT, \
     UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN, DELETE_REQUEST, REQUEST_ITEMS, BATCH_WRITE_ITEM, \
-    PUT_REQUEST, KEYS, BATCH_GET_ITEM, EXCLUSIVE_START_TABLE_NAME
+    PUT_REQUEST, KEYS, BATCH_GET_ITEM, EXCLUSIVE_START_TABLE_NAME, UPDATE, GLOBAL_SECONDARY_INDEX_UPDATES, EXISTS, \
+    NOT_NULL, NULL, EQ, QUERY_FILTER_VALUES, NOT_CONTAINS, FILTER_EXPRESSION_OPERATOR_MAP, CONDITIONAL_OPERATOR, \
+    GET_ITEM, SHORT_ATTR_TYPES, EXCLUSIVE_START_KEY, ITEMS, LAST_EVALUATED_KEY, CONDITIONAL_OPERATORS, EXPECTED, \
+    QUERY_FILTER, RETURN_CONSUMED_CAPACITY_VALUES, RETURN_ITEM_COLL_METRICS, RETURN_VALUES_VALUES, RETURN_VALUES, \
+    RETURN_ITEM_COLL_METRICS_VALUES, BINARY_SHORT, DEFAULT_ENCODING, BINARY_SET_SHORT
 from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, \
     ScanError, GetError
-from pynamodb.expressions.operand import Path
-from pynamodb.expressions.projection import create_projection_expression
-from pynamodb.expressions.update import Update
+
+from inpynamodb.expressions.condition import Condition
+from inpynamodb.expressions.operand import Path
+from inpynamodb.expressions.projection import create_projection_expression
+from inpynamodb.expressions.update import Update
+from pynamodb.types import RANGE, HASH
 
 from inpynamodb.settings import get_settings_value
+
+BOTOCORE_EXCEPTIONS = (BotoCoreError, ClientError)
 
 log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
 
 
-class AsyncConnection(base.Connection):
+class MetaTable(object):
+    """
+    A pythonic wrapper around table metadata
+    """
+
+    def __init__(self, data):
+        self.data = data or {}
+        self._range_keyname = None
+        self._hash_keyname = None
+
+    def __repr__(self):
+        if self.data:
+            return six.u("MetaTable<{0}>".format(self.data.get(TABLE_NAME)))
+
+    @property
+    def range_keyname(self):
+        """
+        Returns the name of this table's range key
+        """
+        if self._range_keyname is None:
+            for attr in self.data.get(KEY_SCHEMA):
+                if attr.get(KEY_TYPE) == RANGE:
+                    self._range_keyname = attr.get(ATTR_NAME)
+        return self._range_keyname
+
+    @property
+    def hash_keyname(self):
+        """
+        Returns the name of this table's hash key
+        """
+        if self._hash_keyname is None:
+            for attr in self.data.get(KEY_SCHEMA):
+                if attr.get(KEY_TYPE) == HASH:
+                    self._hash_keyname = attr.get(ATTR_NAME)
+                    break
+        return self._hash_keyname
+
+    def get_index_hash_keyname(self, index_name):
+        """
+        Returns the name of the hash key for a given index
+        """
+        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
+        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
+        indexes = []
+        if local_indexes:
+            indexes += local_indexes
+        if global_indexes:
+            indexes += global_indexes
+        for index in indexes:
+            if index.get(INDEX_NAME) == index_name:
+                for schema_key in index.get(KEY_SCHEMA):
+                    if schema_key.get(KEY_TYPE) == HASH:
+                        return schema_key.get(ATTR_NAME)
+
+    def get_index_range_keyname(self, index_name):
+        """
+        Returns the name of the hash key for a given index
+        """
+        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
+        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
+        indexes = []
+        if local_indexes:
+            indexes += local_indexes
+        if global_indexes:
+            indexes += global_indexes
+        for index in indexes:
+            if index.get(INDEX_NAME) == index_name:
+                for schema_key in index.get(KEY_SCHEMA):
+                    if schema_key.get(KEY_TYPE) == RANGE:
+                        return schema_key.get(ATTR_NAME)
+        return None
+
+    def get_item_attribute_map(self, attributes, item_key=ITEM, pythonic_key=True):
+        """
+        Builds up a dynamodb compatible AttributeValue map
+        """
+        if pythonic_key:
+            item_key = item_key
+        attr_map = {
+            item_key: {}
+        }
+        for key, value in attributes.items():
+            # In this case, the user provided a mapping
+            # {'key': {'S': 'value'}}
+            if isinstance(value, dict):
+                attr_map[item_key][key] = value
+            else:
+                attr_map[item_key][key] = {
+                    self.get_attribute_type(key): value
+                }
+        return attr_map
+
+    def get_attribute_type(self, attribute_name, value=None):
+        """
+        Returns the proper attribute type for a given attribute name
+        """
+        for attr in self.data.get(ATTR_DEFINITIONS):
+            if attr.get(ATTR_NAME) == attribute_name:
+                return attr.get(ATTR_TYPE)
+        if value is not None and isinstance(value, dict):
+            for key in SHORT_ATTR_TYPES:
+                if key in value:
+                    return key
+        attr_names = [attr.get(ATTR_NAME) for attr in self.data.get(ATTR_DEFINITIONS)]
+        raise ValueError("No attribute {0} in {1}".format(attribute_name, attr_names))
+
+    def get_identifier_map(self, hash_key, range_key=None, key=KEY):
+        """
+        Builds the identifier map that is common to several operations
+        """
+        kwargs = {
+            key: {
+                self.hash_keyname: {
+                    self.get_attribute_type(self.hash_keyname): hash_key
+                }
+            }
+        }
+        if range_key is not None:
+            kwargs[key][self.range_keyname] = {
+                self.get_attribute_type(self.range_keyname): range_key
+            }
+        return kwargs
+
+    def get_exclusive_start_key_map(self, exclusive_start_key):
+        """
+        Builds the exclusive start key attribute map
+        """
+        if isinstance(exclusive_start_key, dict) and self.hash_keyname in exclusive_start_key:
+            # This is useful when paginating results, as the LastEvaluatedKey returned is already
+            # structured properly
+            return {
+                EXCLUSIVE_START_KEY: exclusive_start_key
+            }
+        else:
+            return {
+                EXCLUSIVE_START_KEY: {
+                    self.hash_keyname: {
+                        self.get_attribute_type(self.hash_keyname): exclusive_start_key
+                    }
+                }
+            }
+
+
+class AsyncConnection(object):
+    """
+    A higher level abstraction over aiobotocore
+    """
     def __init__(self, region=None, host=None, session_cls=None, request_timeout_seconds=None, max_retry_attempts=None,
                  base_backoff_ms=None):
         self._tables = {}
@@ -61,6 +224,9 @@ class AsyncConnection(base.Connection):
         else:
             self._base_backoff_ms = get_settings_value('base_backoff_ms')
 
+    def __repr__(self):
+        return six.u("Connection<{0}>".format(self.client.meta.endpoint_url))
+
     def __del__(self):
         self.close_session()
 
@@ -73,6 +239,25 @@ class AsyncConnection(base.Connection):
             self._session = get_session()
         return self._session
 
+    def _log_debug(self, operation, kwargs):
+        """
+        Sends a debug message to the logger
+        """
+        log.debug("Calling %s with arguments %s", operation, kwargs)
+
+    def _log_debug_response(self, operation, response):
+        """
+        Sends a debug message to the logger about a response
+        """
+        log.debug("%s response: %s", operation, response)
+
+    def _log_error(self, operation, response):
+        """
+        Sends an error message to the logger
+        """
+        log.error("%s failed with status: %s, message: %s",
+                  operation, response.status_code,response.content)
+
     def close_session(self):
         self.client.close()
 
@@ -84,6 +269,33 @@ class AsyncConnection(base.Connection):
         if self._requests_session is None:
             self._requests_session = self.session_cls()
         return self._requests_session
+
+    async def _get_filter_expression(self, table_name, filters, conditional_operator,
+                                     name_placeholders, expression_attribute_values):
+        """
+        Builds the FilterExpression needed for Query and Scan operations
+        """
+        condition_expression = None
+        conditional_operator = conditional_operator[CONDITIONAL_OPERATOR]
+        # We sort the keys here for determinism. This is mostly done to simplify testing.
+        for key in sorted(filters.keys()):
+            condition = filters[key]
+            operator = condition.get(COMPARISON_OPERATOR)
+            if operator not in QUERY_FILTER_VALUES:
+                raise ValueError("{0} must be one of {1}".format(COMPARISON_OPERATOR, QUERY_FILTER_VALUES))
+            not_contains = operator == NOT_CONTAINS
+            operator = FILTER_EXPRESSION_OPERATOR_MAP[operator]
+            values = condition.get(ATTR_VALUE_LIST, [])
+            condition = await self._get_condition(table_name, key, operator, *values)
+            if not_contains:
+                condition = ~condition
+            if condition_expression is None:
+                condition_expression = condition
+            elif conditional_operator == AND:
+                condition_expression = condition_expression & condition
+            else:
+                condition_expression = condition_expression | condition
+        return condition_expression.serialize(name_placeholders, expression_attribute_values)
 
     async def _get_condition(self, table_name, attribute_name, operator, *values):
         values = [
@@ -212,6 +424,58 @@ class AsyncConnection(base.Connection):
         except BOTOCORE_EXCEPTIONS as e:
             raise QueryError("Failed to query items: {0}".format(e), e)
 
+    def parse_attribute(self, attribute, return_type=False):
+        """
+        Returns the attribute value, where the attribute can be
+        a raw attribute value, or a dictionary containing the type:
+        {'S': 'String value'}
+        """
+        if isinstance(attribute, dict):
+            for key in SHORT_ATTR_TYPES:
+                if key in attribute:
+                    if return_type:
+                        return key, attribute.get(key)
+                    return attribute.get(key)
+            raise ValueError("Invalid attribute supplied: {0}".format(attribute))
+        else:
+            if return_type:
+                return None, attribute
+            return attribute
+
+    async def _get_condition_expression(self, table_name, expected, conditional_operator,
+                                        name_placeholders, expression_attribute_values):
+        """
+        Builds the ConditionExpression needed for DeleteItem, PutItem, and UpdateItem operations
+        """
+        condition_expression = None
+        conditional_operator = conditional_operator[CONDITIONAL_OPERATOR]
+        # We sort the keys here for determinism. This is mostly done to simplify testing.
+        for key in sorted(expected.keys()):
+            condition = expected[key]
+            if EXISTS in condition:
+                operator = NOT_NULL if condition.get(EXISTS, True) else NULL
+                values = []
+            elif VALUE in condition:
+                operator = EQ
+                values = [condition.get(VALUE)]
+            else:
+                operator = condition.get(COMPARISON_OPERATOR)
+                values = condition.get(ATTR_VALUE_LIST, [])
+            if operator not in QUERY_FILTER_VALUES:
+                raise ValueError("{0} must be one of {1}".format(COMPARISON_OPERATOR, QUERY_FILTER_VALUES))
+            not_contains = operator == NOT_CONTAINS
+            operator = FILTER_EXPRESSION_OPERATOR_MAP[operator]
+            condition = await self._get_condition(table_name, key, operator, *values)
+            if not_contains:
+                condition = ~condition
+            if condition_expression is None:
+                condition_expression = condition
+            elif conditional_operator == AND:
+                condition_expression = condition_expression & condition
+            else:
+                condition_expression = condition_expression | condition
+        return condition_expression.serialize(name_placeholders, expression_attribute_values)
+
     async def get_exclusive_start_key_map(self, table_name, exclusive_start_key):
         """
         Builds the exclusive start key attribute map
@@ -243,9 +507,6 @@ class AsyncConnection(base.Connection):
                 capacity = capacity.get(CAPACITY_UNITS)
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
-
-    async def _make_api_call(self, operation_name, operation_kwargs):
-        return await self.client._make_api_call(operation_name, operation_kwargs)
 
     async def batch_write_item(self,
                                table_name,
@@ -286,6 +547,165 @@ class AsyncConnection(base.Connection):
         except BOTOCORE_EXCEPTIONS as e:
             raise PutError("Failed to batch write items: {0}".format(e), e)
 
+    def get_item_collection_map(self, return_item_collection_metrics):
+        """
+        Builds the item collection map
+        """
+        if return_item_collection_metrics.upper() not in RETURN_ITEM_COLL_METRICS_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_ITEM_COLL_METRICS_VALUES))
+        return {
+            RETURN_ITEM_COLL_METRICS: str(return_item_collection_metrics).upper()
+        }
+
+    async def rate_limited_scan(self,
+                                table_name,
+                                filter_condition=None,
+                                attributes_to_get=None,
+                                page_size=None,
+                                limit=None,
+                                conditional_operator=None,
+                                scan_filter=None,
+                                exclusive_start_key=None,
+                                segment=None,
+                                total_segments=None,
+                                timeout_seconds=None,
+                                read_capacity_to_consume_per_second=10,
+                                allow_rate_limited_scan_without_consumed_capacity=None,
+                                max_sleep_between_retry=10,
+                                max_consecutive_exceptions=10,
+                                consistent_read=None):
+        """
+        Performs a rate limited scan on the table. The API uses the scan API to fetch items from
+        DynamoDB. The rate_limited_scan uses the 'ConsumedCapacity' value returned from DynamoDB to
+        limit the rate of the scan. 'ProvisionedThroughputExceededException' is also handled and retried.
+
+        :param table_name: Name of the table to perform scan on.
+        :param filter_condition: Condition used to restrict the scan results
+        :param attributes_to_get: A list of attributes to return.
+        :param page_size: Page size of the scan to DynamoDB
+        :param limit: Used to limit the number of results returned
+        :param conditional_operator:
+        :param scan_filter: A map indicating the condition that evaluates the scan results
+        :param exclusive_start_key: If set, provides the starting point for scan.
+        :param segment: If set, then scans the segment
+        :param total_segments: If set, then specifies total segments
+        :param timeout_seconds: Timeout value for the rate_limited_scan method, to prevent it from running
+            infinitely
+        :param read_capacity_to_consume_per_second: Amount of read capacity to consume
+            every second
+        :param allow_rate_limited_scan_without_consumed_capacity: If set, proceeds without rate limiting if
+            the server does not support returning consumed capacity in responses.
+        :param max_sleep_between_retry: Max value for sleep in seconds in between scans during
+            throttling/rate limit scenarios
+        :param max_consecutive_exceptions: Max number of consecutive ProvisionedThroughputExceededException
+            exception for scan to exit
+        :param consistent_read: enable consistent read
+        """
+        read_capacity_to_consume_per_ms = float(read_capacity_to_consume_per_second) / 1000
+        if allow_rate_limited_scan_without_consumed_capacity is None:
+            allow_rate_limited_scan_without_consumed_capacity = get_settings_value(
+                'allow_rate_limited_scan_without_consumed_capacity'
+            )
+        total_consumed_read_capacity = 0.0
+        last_evaluated_key = exclusive_start_key
+        rate_available = True
+        latest_scan_consumed_capacity = 0
+        consecutive_provision_throughput_exceeded_ex = 0
+        start_time = time.time()
+
+        if page_size is None:
+            if limit and read_capacity_to_consume_per_second > limit:
+                page_size = limit
+            else:
+                page_size = read_capacity_to_consume_per_second
+
+        while True:
+            if rate_available:
+                try:
+                    data = await self.scan(
+                        table_name,
+                        filter_condition=filter_condition,
+                        attributes_to_get=attributes_to_get,
+                        exclusive_start_key=last_evaluated_key,
+                        limit=page_size,
+                        conditional_operator=conditional_operator,
+                        return_consumed_capacity=TOTAL,
+                        scan_filter=scan_filter,
+                        segment=segment,
+                        total_segments=total_segments,
+                        consistent_read=consistent_read
+                    )
+                    for item in data.get(ITEMS):
+                        yield item
+
+                        if limit is not None:
+                            limit -= 1
+                            if not limit:
+                                return
+
+                    if CONSUMED_CAPACITY in data:
+                        latest_scan_consumed_capacity = data.get(CONSUMED_CAPACITY).get(CAPACITY_UNITS)
+                    else:
+                        if allow_rate_limited_scan_without_consumed_capacity:
+                            latest_scan_consumed_capacity = 0
+                        else:
+                            raise ScanError('Rate limited scan not possible because the server did not send back'
+                                            'consumed capacity information. If you wish scans to complete anyway'
+                                            'without functioning rate limiting, set '
+                                            'allow_rate_limited_scan_without_consumed_capacity to True in settings.')
+
+                    last_evaluated_key = data.get(LAST_EVALUATED_KEY, None)
+                    consecutive_provision_throughput_exceeded_ex = 0
+                except ScanError as e:
+                    # Only retry if provision throughput is exceeded.
+                    if isinstance(e.cause, ClientError):
+                        code = e.cause.response['Error'].get('Code')
+                        if code == "ProvisionedThroughputExceededException":
+                            consecutive_provision_throughput_exceeded_ex += 1
+                            if consecutive_provision_throughput_exceeded_ex > max_consecutive_exceptions:
+                                # Max threshold reached
+                                raise
+                        else:
+                            # Different exception, other than ProvisionedThroughputExceededException
+                            raise
+                    else:
+                        # Not a Client error
+                        raise
+
+            # No throttling, and no more scans needed. Just return
+            if not last_evaluated_key and consecutive_provision_throughput_exceeded_ex == 0:
+                return
+
+            current_time = time.time()
+
+            # elapsed_time_ms indicates the time taken in ms from the start of the
+            # throttled_scan call.
+            elapsed_time_ms = max(1, round((current_time - start_time) * 1000))
+
+            if consecutive_provision_throughput_exceeded_ex == 0:
+                total_consumed_read_capacity += latest_scan_consumed_capacity
+                consumed_rate = total_consumed_read_capacity / elapsed_time_ms
+                rate_available = (read_capacity_to_consume_per_ms - consumed_rate) >= 0
+
+            # consecutive_provision_throughput_exceeded_ex > 0 indicates ProvisionedThroughputExceededException occurred.
+            # ProvisionedThroughputExceededException can occur if:
+            #    - The rate to consume is passed incorrectly.
+            #    - External factors, even if the current scan is within limits.
+            if not rate_available or (consecutive_provision_throughput_exceeded_ex > 0):
+                # Minimum value is 1 second.
+                elapsed_time_s = math.ceil(elapsed_time_ms / 1000)
+                # Sleep proportional to the ratio of --consumed capacity-- to --capacity to consume--
+                time_to_sleep = max(1, round((total_consumed_read_capacity / elapsed_time_s) \
+                                             / read_capacity_to_consume_per_second))
+
+                # At any moment if the timeout_seconds hits, then return
+                if timeout_seconds and (elapsed_time_s + time_to_sleep) > timeout_seconds:
+                    raise ScanError("Input timeout value {0} has expired".format(timeout_seconds))
+
+                time.sleep(min(math.ceil(time_to_sleep), max_sleep_between_retry))
+                # Reset the latest_scan_consumed_capacity, as no scan operation was performed.
+                latest_scan_consumed_capacity = 0
+
     async def scan(self,
                    table_name,
                    filter_condition=None,
@@ -325,7 +745,7 @@ class AsyncConnection(base.Connection):
             operation_kwargs[TOTAL_SEGMENTS] = total_segments
         if scan_filter:
             conditional_operator = self.get_conditional_operator(conditional_operator or AND)
-            filter_expression = self._get_filter_expression(
+            filter_expression = await self._get_filter_expression(
                 table_name, scan_filter, conditional_operator, name_placeholders, expression_attribute_values)
             operation_kwargs[FILTER_EXPRESSION] = filter_expression
         if consistent_read:
@@ -372,7 +792,7 @@ class AsyncConnection(base.Connection):
         # We read the conditional operator even without expected passed in to maintain existing behavior.
         conditional_operator = self.get_conditional_operator(conditional_operator or AND)
         if expected:
-            condition_expression = self._get_condition_expression(
+            condition_expression = await self._get_condition_expression(
                 table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
             operation_kwargs[CONDITION_EXPRESSION] = condition_expression
         if name_placeholders:
@@ -426,6 +846,23 @@ class AsyncConnection(base.Connection):
                     raise
         return self._tables[table_name]
 
+    def get_conditional_operator(self, operator):
+        """
+        Returns a dictionary containing the correct conditional operator,
+        validating it first.
+        """
+        operator = operator.upper()
+        if operator not in CONDITIONAL_OPERATORS:
+            raise ValueError(
+                "The {0} must be one of {1}".format(
+                    CONDITIONAL_OPERATOR,
+                    CONDITIONAL_OPERATORS
+                )
+            )
+        return {
+            CONDITIONAL_OPERATOR: operator
+        }
+
     async def get_item_attribute_map(self, table_name, attributes, item_key=ITEM, pythonic_key=True):
         """
         Builds up a dynamodb compatible AttributeValue map
@@ -437,6 +874,16 @@ class AsyncConnection(base.Connection):
             attributes,
             item_key=item_key,
             pythonic_key=pythonic_key)
+
+    def get_consumed_capacity_map(self, return_consumed_capacity):
+        """
+        Builds the consumed capacity map that is common to several operations
+        """
+        if return_consumed_capacity.upper() not in RETURN_CONSUMED_CAPACITY_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_CONSUMED_CAPACITY_VALUES))
+        return {
+            RETURN_CONSUMED_CAPACITY: str(return_consumed_capacity).upper()
+        }
 
     async def batch_get_item(self,
                              table_name,
@@ -469,13 +916,37 @@ class AsyncConnection(base.Connection):
         keys_map = {KEYS: []}
         for key in keys:
             keys_map[KEYS].append(
-                await self.get_item_attribute_map(table_name, key)[ITEM]
+                (await self.get_item_attribute_map(table_name, key))[ITEM]
             )
         operation_kwargs[REQUEST_ITEMS][table_name].update(keys_map)
         try:
             return await self.dispatch(BATCH_GET_ITEM, operation_kwargs)
         except BOTOCORE_EXCEPTIONS as e:
             raise GetError("Failed to batch get items: {0}".format(e), e)
+
+    async def get_item(self,
+                       table_name,
+                       hash_key,
+                       range_key=None,
+                       consistent_read=False,
+                       attributes_to_get=None):
+        """
+        Performs the GetItem operation and returns the result
+        """
+        operation_kwargs = {}
+        name_placeholders = {}
+        if attributes_to_get is not None:
+            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
+            operation_kwargs[PROJECTION_EXPRESSION] = projection_expression
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        operation_kwargs[CONSISTENT_READ] = consistent_read
+        operation_kwargs[TABLE_NAME] = table_name
+        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key))
+        try:
+            return await self.dispatch(GET_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise GetError("Failed to get item: {0}".format(e), e)
 
     async def put_item(self,
                        table_name,
@@ -513,7 +984,7 @@ class AsyncConnection(base.Connection):
         # We read the conditional operator even without expected passed in to maintain existing behavior.
         conditional_operator = self.get_conditional_operator(conditional_operator or AND)
         if expected:
-            condition_expression = self._get_condition_expression(
+            condition_expression = await self._get_condition_expression(
                 table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
             operation_kwargs[CONDITION_EXPRESSION] = condition_expression
         if name_placeholders:
@@ -589,7 +1060,7 @@ class AsyncConnection(base.Connection):
         # We read the conditional operator even without expected passed in to maintain existing behavior.
         conditional_operator = self.get_conditional_operator(conditional_operator or AND)
         if expected:
-            condition_expression = self._get_condition_expression(
+            condition_expression = await self._get_condition_expression(
                 table_name, expected, conditional_operator, name_placeholders, expression_attribute_values)
             operation_kwargs[CONDITION_EXPRESSION] = condition_expression
         if name_placeholders:
@@ -614,6 +1085,70 @@ class AsyncConnection(base.Connection):
         except BOTOCORE_EXCEPTIONS as e:
             raise TableError("Failed to delete table: {0}".format(e), e)
         return data
+
+    async def update_table(self,
+                           table_name,
+                           read_capacity_units=None,
+                           write_capacity_units=None,
+                           global_secondary_index_updates=None):
+        """
+        Performs the UpdateTable operation
+        """
+        operation_kwargs = {
+            TABLE_NAME: table_name
+        }
+        if read_capacity_units and not write_capacity_units or write_capacity_units and not read_capacity_units:
+            raise ValueError("read_capacity_units and write_capacity_units are required together")
+        if read_capacity_units and write_capacity_units:
+            operation_kwargs[PROVISIONED_THROUGHPUT] = {
+                READ_CAPACITY_UNITS: read_capacity_units,
+                WRITE_CAPACITY_UNITS: write_capacity_units
+            }
+        if global_secondary_index_updates:
+            global_secondary_indexes_list = []
+            for index in global_secondary_index_updates:
+                global_secondary_indexes_list.append({
+                    UPDATE: {
+                        INDEX_NAME: index.get(pythonic(INDEX_NAME)),
+                        PROVISIONED_THROUGHPUT: {
+                            READ_CAPACITY_UNITS: index.get(pythonic(READ_CAPACITY_UNITS)),
+                            WRITE_CAPACITY_UNITS: index.get(pythonic(WRITE_CAPACITY_UNITS))
+                        }
+                    }
+                })
+            operation_kwargs[GLOBAL_SECONDARY_INDEX_UPDATES] = global_secondary_indexes_list
+        try:
+            return await self.dispatch(UPDATE_TABLE, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise TableError("Failed to update table: {0}".format(e), e)
+
+    def _check_condition(self, name, condition, expected_or_filter, conditional_operator):
+        if condition is not None:
+            if not isinstance(condition, Condition):
+                raise ValueError("'{0}' must be an instance of Condition".format(name))
+            if expected_or_filter or conditional_operator is not None:
+                raise ValueError("Legacy conditional parameters cannot be used with condition expressions")
+        else:
+            if expected_or_filter or conditional_operator is not None:
+                warnings.warn("Legacy conditional parameters are deprecated in favor of condition expressions")
+
+    def _check_actions(self, actions, attribute_updates):
+        if actions is not None:
+            if attribute_updates is not None:
+                raise ValueError("Legacy attribute updates cannot be used with update actions")
+        else:
+            if attribute_updates is not None:
+                warnings.warn("Legacy attribute updates are deprecated in favor of update actions")
+
+    def get_return_values_map(self, return_values):
+        """
+        Builds the return values map that is common to several operations
+        """
+        if return_values.upper() not in RETURN_VALUES_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_VALUES, RETURN_VALUES_VALUES))
+        return {
+            RETURN_VALUES: str(return_values).upper()
+        }
 
     async def create_table(self,
                            table_name,
@@ -704,6 +1239,7 @@ class AsyncConnection(base.Connection):
             return await self.dispatch(LIST_TABLES, operation_kwargs)
         except BOTOCORE_EXCEPTIONS as e:
             raise TableError("Unable to list tables: {0}".format(e), e)
+
     @property
     def client(self):
         """
@@ -713,6 +1249,20 @@ class AsyncConnection(base.Connection):
         # https://github.com/boto/botocore/blob/4d55c9b4142/botocore/credentials.py#L1016-L1021
         # if the client does not have credentials, we create a new client
         # otherwise the client is permanently poisoned in the case of metadata service flakiness when using IAM roles
+        # TODO session connection check
         if not self._client or (self._client._request_signer and not self._client._request_signer._credentials):
             self._client = self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host)
         return self._client
+
+    @staticmethod
+    def _reverse_dict(d):
+        return dict((v, k) for k, v in six.iteritems(d))
+
+
+def _convert_binary(attr):
+    if BINARY_SHORT in attr:
+        attr[BINARY_SHORT] = b64decode(attr[BINARY_SHORT].encode(DEFAULT_ENCODING))
+    elif BINARY_SET_SHORT in attr:
+        value = attr[BINARY_SET_SHORT]
+        if value and len(value):
+            attr[BINARY_SET_SHORT] = set(b64decode(v.encode(DEFAULT_ENCODING)) for v in value)
