@@ -180,7 +180,7 @@ class Model(PynamoDBModel):
     def __init__(self, **attributes):
         if 'cls' not in inspect.stack()[1][0].f_locals or \
                 inspect.stack()[1][0].f_locals['cls'].__class__.__name__ != 'MetaModel' or \
-                inspect.stack()[1][3] != "create":
+                inspect.stack()[1][3] != "initialize":
             raise InvalidUsageException("You should declare a model with initialize() factory method.")
 
         super().__init__(**attributes)
