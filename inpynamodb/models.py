@@ -181,7 +181,7 @@ class Model(PynamoDBModel):
         if 'cls' not in inspect.stack()[1][0].f_locals or \
                 inspect.stack()[1][0].f_locals['cls'].__class__.__name__ != 'MetaModel' or \
                 inspect.stack()[1][3] != "create":
-            raise InvalidUsageException("You should declare a model with create() factory method.")
+            raise InvalidUsageException("You should declare a model with initialize() factory method.")
 
         super().__init__(**attributes)
 
@@ -200,7 +200,7 @@ class Model(PynamoDBModel):
             return six.u(msg)
 
     @classmethod
-    async def create(cls, hash_key=None, range_key=None, **attributes):
+    async def initialize(cls, hash_key=None, range_key=None, **attributes):
         if hash_key is not None:
             attributes[cls._dynamo_to_python_attr((await cls._get_meta_data()).hash_keyname)] = hash_key
         if range_key is not None:
@@ -259,7 +259,8 @@ class Model(PynamoDBModel):
                 if attr_name not in attr_keys:
                     schema[pythonic(ATTR_DEFINITIONS)].append(attr)
                     attr_keys.append(attr_name)
-            cls._get_connection().create_table(
+
+            await cls._get_connection().create_table(
                 **schema
             )
 
@@ -420,7 +421,7 @@ class Model(PynamoDBModel):
             attr = cls._get_attributes().get(attr_name, None)
             if attr:
                 kwargs[attr_name] = attr.deserialize(attr.get_value(value))
-        return await cls.create(*args, **kwargs)
+        return await cls.initialize(*args, **kwargs)
 
     @classmethod
     async def count(cls,
