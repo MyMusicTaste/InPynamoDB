@@ -1788,140 +1788,139 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    # TODO: Not implemented yet
     @pytest.mark.asyncio
-    # async def test_rate_limited_scan(self):
-    #     """
-    #     Connection.rate_limited_scan
-    #     """
-    #     conn = Connection()
-    #     table_name = 'Thread'
-    #     SCAN_METHOD_TO_PATCH = 'pynamodb.connection.Connection.scan'
-    #
-    #     def verify_scan_call_args(call_args,
-    #                               table_name,
-    #                               exclusive_start_key=None,
-    #                               total_segments=None,
-    #                               attributes_to_get=None,
-    #                               conditional_operator=None,
-    #                               limit=10,
-    #                               return_consumed_capacity='TOTAL',
-    #                               scan_filter=None,
-    #                               segment=None):
-    #         self.assertEqual(call_args[0][0], table_name)
-    #         self.assertEqual(call_args[1]['exclusive_start_key'], exclusive_start_key)
-    #         self.assertEqual(call_args[1]['total_segments'], total_segments)
-    #         self.assertEqual(call_args[1]['attributes_to_get'], attributes_to_get)
-    #         self.assertEqual(call_args[1]['conditional_operator'], conditional_operator)
-    #         self.assertEqual(call_args[1]['limit'], limit)
-    #         self.assertEqual(call_args[1]['return_consumed_capacity'], return_consumed_capacity)
-    #         self.assertEqual(call_args[1]['scan_filter'], scan_filter)
-    #         self.assertEqual(call_args[1]['segment'], segment)
-    #
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
-    #         resp = conn.rate_limited_scan(
-    #             table_name
-    #         )
-    #         values = list(resp)
-    #         self.assertEqual(0, len(values))
-    #         verify_scan_call_args(req.call_args, table_name)
-    #
-    #     # Attempts to use rate limited scanning should fail with a ScanError if the DynamoDB implementation
-    #     # does not return ConsumedCapacity (e.g. DynamoDB Local).
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': []}
-    #         self.assertRaises(ScanError, lambda: list(conn.rate_limited_scan(table_name)))
-    #
-    #     # ... unless explicitly indicated that it's okay to proceed without rate limiting through an explicit parameter
-    #     # (or through settings, which isn't tested here).
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': []}
-    #         list(conn.rate_limited_scan(table_name, allow_rate_limited_scan_without_consumed_capacity=True))
-    #
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
-    #         resp = conn.rate_limited_scan(
-    #             table_name,
-    #             limit=10,
-    #             segment=20,
-    #             total_segments=22,
-    #         )
-    #
-    #         values = list(resp)
-    #         self.assertEqual(0, len(values))
-    #         verify_scan_call_args(req.call_args,
-    #                               table_name,
-    #                               segment=20,
-    #                               total_segments=22,
-    #                               limit=10)
-    #
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
-    #         scan_filter = {
-    #             'ForumName': {
-    #                 'AttributeValueList': [
-    #                     {'S': 'Foo'}
-    #                 ],
-    #                 'ComparisonOperator': 'BEGINS_WITH'
-    #             },
-    #             'Subject': {
-    #                 'AttributeValueList': [
-    #                     {'S': 'Foo'}
-    #                 ],
-    #                 'ComparisonOperator': 'CONTAINS'
-    #             }
-    #         }
-    #
-    #         resp = conn.rate_limited_scan(
-    #             table_name,
-    #             exclusive_start_key='FooForum',
-    #             page_size=1,
-    #             segment=2,
-    #             total_segments=4,
-    #             scan_filter=scan_filter,
-    #             conditional_operator='AND',
-    #             attributes_to_get=['ForumName']
-    #         )
-    #
-    #         values = list(resp)
-    #         self.assertEqual(0, len(values))
-    #         verify_scan_call_args(req.call_args,
-    #                               table_name,
-    #                               exclusive_start_key='FooForum',
-    #                               limit=1,
-    #                               segment=2,
-    #                               total_segments=4,
-    #                               attributes_to_get=['ForumName'],
-    #                               scan_filter=scan_filter,
-    #                               conditional_operator='AND')
-    #
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
-    #         resp = conn.rate_limited_scan(
-    #             table_name,
-    #             page_size=5,
-    #             limit=10,
-    #             read_capacity_to_consume_per_second=2
-    #         )
-    #         values = list(resp)
-    #         self.assertEqual(0, len(values))
-    #         verify_scan_call_args(req.call_args,
-    #                               table_name,
-    #                               limit=5)
-    #
-    #     with patch(SCAN_METHOD_TO_PATCH) as req:
-    #         req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
-    #         resp = conn.rate_limited_scan(
-    #             table_name,
-    #             limit=10,
-    #             read_capacity_to_consume_per_second=4
-    #         )
-    #         values = list(resp)
-    #         self.assertEqual(0, len(values))
-    #         verify_scan_call_args(req.call_args,
-    #                               table_name,
-    #                               limit=4)
+    async def test_rate_limited_scan(self):
+        """
+        Connection.rate_limited_scan
+        """
+        conn = Connection()
+        table_name = 'Thread'
+        SCAN_METHOD_TO_PATCH = 'inpynamodb.connection.AsyncConnection.scan'
+
+        def verify_scan_call_args(call_args,
+                                  table_name,
+                                  exclusive_start_key=None,
+                                  total_segments=None,
+                                  attributes_to_get=None,
+                                  conditional_operator=None,
+                                  limit=10,
+                                  return_consumed_capacity='TOTAL',
+                                  scan_filter=None,
+                                  segment=None):
+            self.assertEqual(call_args[0][0], table_name)
+            self.assertEqual(call_args[1]['exclusive_start_key'], exclusive_start_key)
+            self.assertEqual(call_args[1]['total_segments'], total_segments)
+            self.assertEqual(call_args[1]['attributes_to_get'], attributes_to_get)
+            self.assertEqual(call_args[1]['conditional_operator'], conditional_operator)
+            self.assertEqual(call_args[1]['limit'], limit)
+            self.assertEqual(call_args[1]['return_consumed_capacity'], return_consumed_capacity)
+            self.assertEqual(call_args[1]['scan_filter'], scan_filter)
+            self.assertEqual(call_args[1]['segment'], segment)
+
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
+            resp = conn.rate_limited_scan(
+                table_name
+            )
+            values = [i async for i in resp]
+            self.assertEqual(0, len(values))
+            verify_scan_call_args(req.call_args, table_name)
+
+        # Attempts to use rate limited scanning should fail with a ScanError if the DynamoDB implementation
+        # # does not return ConsumedCapacity (e.g. DynamoDB Local).
+        # with patch(SCAN_METHOD_TO_PATCH) as req:
+        #     req.return_value = {'Items': []}
+        #     await self.assertAsyncRaises(ScanError, [i async for i in resp])
+
+        # ... unless explicitly indicated that it's okay to proceed without rate limiting through an explicit parameter
+        # (or through settings, which isn't tested here).
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': []}
+            tmp = [i async for i in conn.rate_limited_scan(table_name, allow_rate_limited_scan_without_consumed_capacity=True)]
+
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
+            resp = conn.rate_limited_scan(
+                table_name,
+                limit=10,
+                segment=20,
+                total_segments=22,
+            )
+
+            values = [i async for i in resp]
+            self.assertEqual(0, len(values))
+            verify_scan_call_args(req.call_args,
+                                  table_name,
+                                  segment=20,
+                                  total_segments=22,
+                                  limit=10)
+
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
+            scan_filter = {
+                'ForumName': {
+                    'AttributeValueList': [
+                        {'S': 'Foo'}
+                    ],
+                    'ComparisonOperator': 'BEGINS_WITH'
+                },
+                'Subject': {
+                    'AttributeValueList': [
+                        {'S': 'Foo'}
+                    ],
+                    'ComparisonOperator': 'CONTAINS'
+                }
+            }
+
+            resp = conn.rate_limited_scan(
+                table_name,
+                exclusive_start_key='FooForum',
+                page_size=1,
+                segment=2,
+                total_segments=4,
+                scan_filter=scan_filter,
+                conditional_operator='AND',
+                attributes_to_get=['ForumName']
+            )
+
+            values = [i async for i in resp]
+            self.assertEqual(0, len(values))
+            verify_scan_call_args(req.call_args,
+                                  table_name,
+                                  exclusive_start_key='FooForum',
+                                  limit=1,
+                                  segment=2,
+                                  total_segments=4,
+                                  attributes_to_get=['ForumName'],
+                                  scan_filter=scan_filter,
+                                  conditional_operator='AND')
+
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
+            resp = conn.rate_limited_scan(
+                table_name,
+                page_size=5,
+                limit=10,
+                read_capacity_to_consume_per_second=2
+            )
+            values = [i async for i in resp]
+            self.assertEqual(0, len(values))
+            verify_scan_call_args(req.call_args,
+                                  table_name,
+                                  limit=5)
+
+        with patch(SCAN_METHOD_TO_PATCH) as req:
+            req.return_value = {'Items': [], 'ConsumedCapacity': {'TableName': table_name, 'CapacityUnits': 10.0}}
+            resp = conn.rate_limited_scan(
+                table_name,
+                limit=10,
+                read_capacity_to_consume_per_second=4
+            )
+            values = [i async for i in resp]
+            self.assertEqual(0, len(values))
+            verify_scan_call_args(req.call_args,
+                                  table_name,
+                                  limit=4)
 
     @pytest.mark.asyncio
     async def test_scan(self):

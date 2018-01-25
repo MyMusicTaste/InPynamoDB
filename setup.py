@@ -1,8 +1,15 @@
 from setuptools import setup, find_packages
 
 install_requires = [
-    'PynamoDB>=3.2.1'
+    'PynamoDB>=3.2.1',
+    'aiobotocore>=0.5.2'
 ]
+
+python_requires = '>=3.6'
+
+def version():
+    with open("VERSION") as f:
+        return f.read().strip()
 
 setup(
     name='InPynamoDB',

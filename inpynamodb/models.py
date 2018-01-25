@@ -12,7 +12,6 @@ from inpynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.exceptions import TableDoesNotExist, DoesNotExist, TableError
 from inpynamodb.indexes import Index, GlobalSecondaryIndex
-from pynamodb.models import Model as PynamoDBModel
 from pynamodb.types import RANGE, HASH
 
 from inpynamodb.pagination import ResultIterator
@@ -749,7 +748,7 @@ class Model(AttributeContainer):
             consistent_read=consistent_read,
         )
 
-        for item in scan_result:
+        async for item in scan_result:
             yield await cls.from_raw_data(item)
 
     @classmethod

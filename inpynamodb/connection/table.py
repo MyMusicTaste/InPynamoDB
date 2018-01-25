@@ -1,7 +1,11 @@
 from inpynamodb.connection.base import AsyncConnection
 
 
-class TableConnection():
+class TableConnection(object):
+    """
+    A higher level abstraction over aiobotocore
+    """
+
     def __init__(self, table_name, region=None, host=None, session_cls=None, request_timeout_seconds=None,
                  max_retry_attempts=None, base_backoff_ms=None):
         self._hash_keyname = None
@@ -77,7 +81,7 @@ class TableConnection():
         """
         Performs the scan operation with rate limited
         """
-        return await self.connection.rate_limited_scan(
+        return self.connection.rate_limited_scan(
             self.table_name,
             filter_condition=filter_condition,
             attributes_to_get=attributes_to_get,

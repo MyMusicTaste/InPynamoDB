@@ -1,6 +1,7 @@
 """
 Lowest level connection
 """
+import asyncio
 import logging
 
 import math
@@ -702,7 +703,7 @@ class AsyncConnection(object):
                 if timeout_seconds and (elapsed_time_s + time_to_sleep) > timeout_seconds:
                     raise ScanError("Input timeout value {0} has expired".format(timeout_seconds))
 
-                time.sleep(min(math.ceil(time_to_sleep), max_sleep_between_retry))
+                await asyncio.sleep(min(math.ceil(time_to_sleep), max_sleep_between_retry))
                 # Reset the latest_scan_consumed_capacity, as no scan operation was performed.
                 latest_scan_consumed_capacity = 0
 

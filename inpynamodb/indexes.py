@@ -149,3 +149,37 @@ class LocalSecondaryIndex(Index):
     A local secondary index
     """
     pass
+
+
+class Projection(object):
+    """
+    A class for presenting projections
+    """
+    projection_type = None
+    non_key_attributes = None
+
+
+class KeysOnlyProjection(Projection):
+    """
+    Keys only projection
+    """
+    projection_type = KEYS_ONLY
+
+
+class IncludeProjection(Projection):
+    """
+    An INCLUDE projection
+    """
+    projection_type = INCLUDE
+
+    def __init__(self, non_attr_keys=None):
+        if not non_attr_keys:
+            raise ValueError("The INCLUDE type projection requires a list of string attribute names")
+        self.non_key_attributes = non_attr_keys
+
+
+class AllProjection(Projection):
+    """
+    An ALL projection
+    """
+    projection_type = ALL
