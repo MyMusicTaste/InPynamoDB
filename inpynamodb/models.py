@@ -266,7 +266,7 @@ class Model(AttributeContainer):
             raise NotImplementedError('Map and List attribute do not support conditional_operator yet')
 
     @classmethod
-    async def batch_get(cls, items, consistent_Read=None, attributes_to_get=None):
+    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None):
         """
         BatchGetItem for this model
 
@@ -280,9 +280,9 @@ class Model(AttributeContainer):
         while items:
             if len(keys_to_get) == BATCH_GET_PAGE_LIMIT:
                 while keys_to_get:
-                    page, unprocessed_keys = cls._batch_get_page(
+                    page, unprocessed_keys = await cls._batch_get_page(
                         keys_to_get,
-                        consistent_read=consistent_Read,
+                        consistent_read=consistent_read,
                         attributes_to_get=attributes_to_get
                     )
                     for batch_item in page:
@@ -299,19 +299,19 @@ class Model(AttributeContainer):
                     range_keyname: range_key
                 })
             else:
-                hash_key = await cls._serialize_keys(item)[0]
+                hash_key = (await cls._serialize_keys(item))[0]
                 keys_to_get.append({
                     hash_keyname: hash_key
                 })
 
         while keys_to_get:
-            page, unprocessed_keys = cls._batch_get_page(
+            page, unprocessed_keys = await cls._batch_get_page(
                 keys_to_get,
-                consistent_read=consistent_Read,
+                consistent_read=consistent_read,
                 attributes_to_get=attributes_to_get
             )
             for batch_item in page:
-                yield cls.from_raw_data(batch_item)
+                yield await cls.from_raw_data(batch_item)
             if unprocessed_keys:
                 keys_to_get = unprocessed_keys
             else:
