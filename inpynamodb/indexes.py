@@ -1,7 +1,9 @@
 """
 PynamoDB Indexes
 """
-from pynamodb.constants import (
+import inspect
+
+from inpynamodb.constants import (
     INCLUDE, ALL, KEYS_ONLY, ATTR_NAME, ATTR_TYPE, KEY_TYPE, ATTR_TYPE_MAP, KEY_SCHEMA,
     ATTR_DEFINITIONS, META_CLASS_NAME
 )
@@ -53,6 +55,7 @@ class Index(with_metaclass(IndexMeta)):
         """
         Count on an index
         """
+
         return await cls.Meta.model.count(
             hash_key,
             range_key_condition=range_key_condition,

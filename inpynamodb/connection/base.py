@@ -342,6 +342,7 @@ class AsyncConnection(object):
         expression_attribute_values = {}
 
         tbl = await self.get_meta_table(table_name)
+
         if tbl is None:
             raise TableError("No such table: {0}".format(table_name))
         if index_name:
@@ -845,6 +846,7 @@ class AsyncConnection(object):
                     raise TableDoesNotExist(e.response['Error']['Message'])
                 else:
                     raise
+
         return self._tables[table_name]
 
     def get_conditional_operator(self, operator):

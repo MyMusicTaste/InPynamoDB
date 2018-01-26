@@ -1,4 +1,5 @@
 import collections
+
 import json
 from base64 import b64encode, b64decode
 from copy import deepcopy
@@ -6,11 +7,12 @@ from datetime import datetime
 from inspect import getargspec
 
 import six
+
 from dateutil.parser import parse
 from dateutil.tz import tzutc
 from pynamodb.compat import getmembers_issubclass
+
 from inpynamodb.expressions.operand import Path
-from six import add_metaclass
 from inpynamodb.constants import (
     STRING, STRING_SHORT, NUMBER, BINARY, UTC, DATETIME_FORMAT, BINARY_SET, STRING_SET, NUMBER_SET,
     MAP, MAP_SHORT, LIST, LIST_SHORT, DEFAULT_ENCODING, BOOLEAN, ATTR_TYPE_MAP, NUMBER_SHORT, NULL, SHORT_ATTR_TYPES
@@ -202,7 +204,7 @@ class AttributeContainerMeta(type):
                 attribute._update_attribute_paths(attribute.attr_name)
 
 
-@add_metaclass(AttributeContainerMeta)
+@six.add_metaclass(AttributeContainerMeta)
 class AttributeContainer(object):
 
     def __init__(self, **attributes):
@@ -541,8 +543,7 @@ class MapAttributeMeta(AttributeContainerMeta):
     """
 
 
-@add_metaclass(MapAttributeMeta)
-class MapAttribute(Attribute, AttributeContainer):
+class MapAttribute(Attribute, AttributeContainer, metaclass=MapAttributeMeta):
     """
     A Map Attribute
 

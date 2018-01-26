@@ -18,7 +18,6 @@ setup(
     author='Sunghyun Lee',
     author_email='jolacaleb@gmail.com',
     description='Asynchronous implementation of PynamoDB',
-    long_description=open('README.md').read(),
     zip_safe=False,
     license='MIT',
     keywords='python dynamodb amazon async',

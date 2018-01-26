@@ -55,9 +55,6 @@ class ResultIterator(object):
         except StopIteration:
             raise StopAsyncIteration
 
-    async def next(self):
-        return await self.__anext__()
-
     @property
     def last_evaluated_key(self):
         return self._last_evaluated_key
