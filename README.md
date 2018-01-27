@@ -33,7 +33,7 @@ class UserModel(Model):
 
 InPynamoDB allows you to create the table if needed (it must exist before you can use it!):
 ```python
-UserModel.create_table(read_capacity_units=1, write_capacity_units=1)
+await UserModel.create_table(read_capacity_units=1, write_capacity_units=1)
 ```
 
 Create a new user:
