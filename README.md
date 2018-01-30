@@ -3,6 +3,11 @@
 
 This transforms [PynamoDB](https://github.com/pynamodb/PynamoDB)'s basic methods working asynchronously used [aiobotocore](https://github.com/aio-libs/aiobotocore).
 
+THIS LIBRARY IS NOT STABLIZED YET!!
+If you find any bugs of suggestions, please leave issue.
+
+There's no main documentation yet, for the time being, you can refer to [PynamoDB documentation](http://pynamodb.readthedocs.io).
+
 ## Requirements
 - Python 3.6 and above
 
@@ -12,8 +17,8 @@ $ pip install InPynamoDB
 ## Basic Usage
 
 ```python
-from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute
+from inpynamodb.models import Model
+from inpynamodb.attributes import UnicodeAttribute
 
 class UserModel(Model):
     """
@@ -28,14 +33,14 @@ class UserModel(Model):
 
 InPynamoDB allows you to create the table if needed (it must exist before you can use it!):
 ```python
-UserModel.create_table(read_capacity_units=1, write_capacity_units=1)
+await UserModel.create_table(read_capacity_units=1, write_capacity_units=1)
 ```
 
 Create a new user:
 ```python
 async def saving_user():
-    user = await UserModel.initialize("John", "Denver")
-    user.email = "djohn@company.org"
+    user = await UserModel.initialize("John", "Denver")  # SHOULD USE METHOD 'initialize()' TO MAKE MODEL.
+    user.email = "djohn@company.org"
     await user.save()
 ```
 
@@ -90,7 +95,7 @@ class TestModel(Model):
 
 Now query the index for all items with 0 views:
 ```python
-async for item in await TestModel.view_index.query(0):
+async for item in TestModel.view_index.query(0):
     print("Item queried from index: {0}".format(item))
 ```
 
