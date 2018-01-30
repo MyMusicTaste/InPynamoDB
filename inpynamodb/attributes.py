@@ -1,6 +1,7 @@
 import collections
 
 import json
+import uuid
 from base64 import b64encode, b64decode
 from copy import deepcopy
 from datetime import datetime
@@ -12,6 +13,7 @@ from dateutil.parser import parse
 from dateutil.tz import tzutc
 from pynamodb.compat import getmembers_issubclass
 
+from inpynamodb.exceptions import InvalidParamException
 from inpynamodb.expressions.operand import Path
 from inpynamodb.constants import (
     STRING, STRING_SHORT, NUMBER, BINARY, UTC, DATETIME_FORMAT, BINARY_SET, STRING_SET, NUMBER_SET,
@@ -384,6 +386,53 @@ class UnicodeAttribute(Attribute):
             return value
         else:
             return six.u(value)
+
+
+class UUIDAttribute(UnicodeAttribute):
+    def __init__(self, hash_key=False, range_key=False, null=None,
+                 default=None, uuid_version=1, attr_name=None, auto=False):
+        """
+        :param hash_key: Indicates that this attribute is hash key of model.
+        :param range_key: Indicates that this attribute is range key of model.
+        :param null: Indicate this attribute is nullable.
+        :param default: Default value of this attribute.
+                        If auto == True, this value will be ignored because UUID will be generated as default.
+        :param uuid_version: UUID version which this attribute will use. Only supports 1 and 4.
+        :param auto: Specify this attribute will generate UUID automatically,
+                     if False, this attribute will behave like other attributes.
+        """
+        self.uuid_version = uuid_version
+        self.uuid_methods_mapper = {
+            1: uuid.uuid1,
+            4: uuid.uuid4
+        }
+
+        if auto:
+            try:
+                super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
+                                                    null=null, default=None, attr_name=attr_name)
+                self.default = str(self.uuid_methods_mapper[uuid_version]())
+
+                # super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
+                #                                     null=null, default=self.uuid_methods_mapper[uuid_version],
+                #                                     attr_name=attr_name)
+
+            except KeyError:
+                raise ValueError("InPynamoDB only supports UUID version 1 and 4 for UUIDAttribute.")
+        else:
+            super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
+                                                null=null, default=default, attr_name=attr_name)
+
+    def serialize(self, value):
+        value_str = str(value)
+        if value:
+            try:
+                uuid.UUID(value_str, version=self.uuid_version)
+                return super(UUIDAttribute, self).serialize(value_str)
+            except ValueError:
+                raise InvalidParamException(cause="Value is not correct UUID.")
+        else:
+            return super(UUIDAttribute, self).serialize(value_str)
 
 
 class JSONAttribute(Attribute):
