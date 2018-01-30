@@ -245,10 +245,14 @@ class AttributeContainer(object):
             default = attr.default
             if callable(default):
                 value = default()
+                if isinstance(value, uuid.UUID):
+                    value = str(value)
+
             else:
                 value = default
             if value is not None:
                 setattr(self, name, value)
+
 
     def _set_attributes(self, **attributes):
         """
@@ -411,11 +415,7 @@ class UUIDAttribute(UnicodeAttribute):
             try:
                 super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
                                                     null=null, default=None, attr_name=attr_name)
-                self.default = str(self.uuid_methods_mapper[uuid_version]())
-
-                # super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
-                #                                     null=null, default=self.uuid_methods_mapper[uuid_version],
-                #                                     attr_name=attr_name)
+                self.default = self.uuid_methods_mapper[uuid_version]
 
             except KeyError:
                 raise ValueError("InPynamoDB only supports UUID version 1 and 4 for UUIDAttribute.")
@@ -424,15 +424,15 @@ class UUIDAttribute(UnicodeAttribute):
                                                 null=null, default=default, attr_name=attr_name)
 
     def serialize(self, value):
-        value_str = str(value)
         if value:
+            value_str = str(value)
             try:
                 uuid.UUID(value_str, version=self.uuid_version)
                 return super(UUIDAttribute, self).serialize(value_str)
             except ValueError:
                 raise InvalidParamException(cause="Value is not correct UUID.")
         else:
-            return super(UUIDAttribute, self).serialize(value_str)
+            return super(UUIDAttribute, self).serialize(value)
 
 
 class JSONAttribute(Attribute):
