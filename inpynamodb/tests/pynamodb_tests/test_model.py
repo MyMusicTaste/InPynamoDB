@@ -3,25 +3,40 @@ Test model API
 """
 import base64
 import copy
+import json
+import random
 from datetime import datetime
 
 import pytest as pytest
+import six
 from aiobotocore import AioSession
 from asynctest import patch, TestCase, CoroutineMock, fail_on, MagicMock
 from botocore.exceptions import ClientError
+from pynamodb.connection.util import pythonic
 from pynamodb.types import RANGE
 
 from inpynamodb.attributes import MapAttribute, UnicodeAttribute, UTCDateTimeAttribute, NumberSetAttribute, UnicodeSetAttribute, \
     BinarySetAttribute, BooleanAttribute, NumberAttribute, BinaryAttribute, ListAttribute
-from inpynamodb.indexes import AllProjection, IncludeProjection
+from inpynamodb.indexes import AllProjection, IncludeProjection, KeysOnlyProjection, Index
 
 from inpynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, RESPONSES, \
-    BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS
+    BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS, ALL, KEYS_ONLY, INCLUDE, MAP_SHORT, LIST_SHORT, NUMBER_SHORT
 from inpynamodb.indexes import LocalSecondaryIndex, GlobalSecondaryIndex
-from inpynamodb.models import Model
+from inpynamodb.models import Model, ResultSet
 from inpynamodb.tests.pynamodb_tests.data import MODEL_TABLE_DATA, SIMPLE_MODEL_TABLE_DATA, \
     CUSTOM_ATTR_NAME_INDEX_TABLE_DATA, GET_MODEL_ITEM_DATA, COMPLEX_TABLE_DATA, COMPLEX_ITEM_DATA, CAR_MODEL_TABLE_DATA, \
-    SIMPLE_BATCH_GET_ITEMS, BATCH_GET_ITEMS, INDEX_TABLE_DATA, LOCAL_INDEX_TABLE_DATA
+    SIMPLE_BATCH_GET_ITEMS, BATCH_GET_ITEMS, INDEX_TABLE_DATA, LOCAL_INDEX_TABLE_DATA, BINARY_ATTR_DATA, \
+    SERIALIZED_TABLE_DATA, COMPLEX_MODEL_SERIALIZED_TABLE_DATA, COMPLEX_MODEL_ITEM_DATA, \
+    OFFICE_EMPLOYEE_MODEL_TABLE_DATA, GROCERY_LIST_MODEL_TABLE_DATA, OFFICE_MODEL_TABLE_DATA, \
+    CAR_MODEL_WITH_NULL_ITEM_DATA, INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA, FULL_CAR_MODEL_ITEM_DATA, \
+    GET_OFFICE_EMPLOYEE_ITEM_DATA, GET_OFFICE_EMPLOYEE_ITEM_DATA_WITH_NULL, GET_GROCERY_LIST_ITEM_DATA, \
+    GET_OFFICE_ITEM_DATA, COMPLEX_MODEL_TABLE_DATA, BOOLEAN_CONVERSION_MODEL_TABLE_DATA, \
+    BOOLEAN_CONVERSION_MODEL_TABLE_DATA_OLD_STYLE, BOOLEAN_CONVERSION_MODEL_OLD_STYLE_FALSE_ITEM_DATA, \
+    BOOLEAN_CONVERSION_MODEL_OLD_STYLE_TRUE_ITEM_DATA, BOOLEAN_CONVERSION_MODEL_NEW_STYLE_FALSE_ITEM_DATA, \
+    BOOLEAN_CONVERSION_MODEL_NEW_STYLE_TRUE_ITEM_DATA, TREE_MODEL_ITEM_DATA, TREE_MODEL_TABLE_DATA, \
+    EXPLICIT_RAW_MAP_MODEL_TABLE_DATA, EXPLICIT_RAW_MAP_MODEL_ITEM_DATA, \
+    EXPLICIT_RAW_MAP_MODEL_AS_SUB_MAP_IN_TYPED_MAP_TABLE_DATA, EXPLICIT_RAW_MAP_MODEL_AS_SUB_MAP_IN_TYPED_MAP_ITEM_DATA, \
+    DOG_TABLE_DATA
 from inpynamodb.tests.pynamodb_tests.deep_eq import deep_eq
 
 PATCH_METHOD = 'aiobotocore.client.AioBaseClient._make_api_call'
@@ -1934,79 +1949,79 @@ class ModelTestCase(TestCase):
         with self.assertRaises(ValueError):
             await UserModel.count(zip_code__le='94117')
 
-    # @pytest.mark.asyncio
-    # async def test_index_count(self):
-    #     """
-    #     Model.index.count()
-    #     """
-    #     with patch(PATCH_METHOD) as req:
-    #         req.return_value = {'Count': 42}
-    #         res = await CustomAttrNameModel.uid_index.count(
-    #             'foo',
-    #             CustomAttrNameModel.overidden_user_name.startswith('bar'),
-    #             limit=2)
-    #         self.assertEqual(res, 42)
-    #         args = req.call_args[0][1]
-    #         params = {
-    #             'KeyConditionExpression': '#0 = :0',
-    #             'FilterExpression': 'begins_with (#1, :1)',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'user_id',
-    #                 '#1': 'user_name'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 }
-    #             },
-    #             'Limit': 2,
-    #             'IndexName': 'uid_index',
-    #             'TableName': 'CustomAttrModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Select': 'COUNT'
-    #         }
-    #         deep_eq(args, params, _assert=True)
+    @pytest.mark.asyncio
+    async def test_index_count(self):
+        """
+        Model.index.count()
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {'Count': 42}
+            res = await CustomAttrNameModel.uid_index.count(
+                'foo',
+                CustomAttrNameModel.overidden_user_name.startswith('bar'),
+                limit=2)
+            self.assertEqual(res, 42)
+            args = req.call_args[0][1]
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': 'begins_with (#1, :1)',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'Limit': 2,
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Select': 'COUNT'
+            }
+            deep_eq(args, params, _assert=True)
 
-    # @pytest.mark.asyncio
-    # async def test_index_multipage_count(self):
-    #     with patch(PATCH_METHOD) as req:
-    #         last_evaluated_key = {
-    #             'user_name': {'S': u'user'},
-    #             'user_id': {'S': '1234'},
-    #         }
-    #         req.side_effect = [
-    #             {'Count': 1000, 'LastEvaluatedKey': last_evaluated_key},
-    #             {'Count': 42}
-    #         ]
-    #         res = await CustomAttrNameModel.uid_index.count('foo')
-    #         self.assertEqual(res, 1042)
-    #
-    #         args_one = req.call_args_list[0][0][1]
-    #         params_one = {
-    #             'KeyConditionExpression': '#0 = :0',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'user_id'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 }
-    #             },
-    #             'IndexName': 'uid_index',
-    #             'TableName': 'CustomAttrModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Select': 'COUNT'
-    #         }
-    #
-    #         args_two = req.call_args_list[1][0][1]
-    #         params_two = copy.deepcopy(params_one)
-    #         params_two['ExclusiveStartKey'] = last_evaluated_key
-    #
-    #         deep_eq(args_one, params_one, _assert=True)
-    #         deep_eq(args_two, params_two, _assert=True)
+    @pytest.mark.asyncio
+    async def test_index_multipage_count(self):
+        with patch(PATCH_METHOD) as req:
+            last_evaluated_key = {
+                'user_name': {'S': u'user'},
+                'user_id': {'S': '1234'},
+            }
+            req.side_effect = [
+                {'Count': 1000, 'LastEvaluatedKey': last_evaluated_key},
+                {'Count': 42}
+            ]
+            res = await CustomAttrNameModel.uid_index.count('foo')
+            self.assertEqual(res, 1042)
+
+            args_one = req.call_args_list[0][0][1]
+            params_one = {
+                'KeyConditionExpression': '#0 = :0',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Select': 'COUNT'
+            }
+
+            args_two = req.call_args_list[1][0][1]
+            params_two = copy.deepcopy(params_one)
+            params_two['ExclusiveStartKey'] = last_evaluated_key
+
+            deep_eq(args_one, params_one, _assert=True)
+            deep_eq(args_two, params_two, _assert=True)
 
     @pytest.mark.asyncio
     async def test_query_limit_greater_than_available_items_single_page(self):
@@ -2288,267 +2303,267 @@ class ModelTestCase(TestCase):
 
             self.assertEqual(len(req.mock_calls), 3)
 
-    # @pytest.mark.asyncio
-    # async def test_index_queries(self):
-    #     """
-    #     Model.Index.Query
-    #     """
-    #     with patch(PATCH_METHOD) as req:
-    #         req.return_value = CUSTOM_ATTR_NAME_INDEX_TABLE_DATA
-    #         await CustomAttrNameModel._get_meta_data()
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         req.return_value = INDEX_TABLE_DATA
-    #         await IndexedModel._get_connection().describe_table()
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         req.return_value = LOCAL_INDEX_TABLE_DATA
-    #         await LocalIndexedModel._get_meta_data()
-    #
-    #     self.assertEqual(IndexedModel.include_index.Meta.index_name, "non_key_idx")
-    #
-    #     queried = []
-    #     with patch(PATCH_METHOD) as req:
-    #         with self.assertRaises(ValueError):
-    #             for item in await IndexedModel.email_index.query('foo', user_id__between=['id-1', 'id-3']):
-    #                 queried.append(item._serialize().get(RANGE))
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         with self.assertRaises(ValueError):
-    #             for item in await IndexedModel.email_index.query('foo', user_name__startswith='foo'):
-    #                 queried.append(item._serialize().get(RANGE))
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         with self.assertRaises(ValueError):
-    #             for item in await IndexedModel.email_index.query('foo', name='foo'):
-    #                 queried.append(item._serialize().get(RANGE))
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         async for item in await IndexedModel.email_index.query('foo', IndexedModel.user_name.startswith('bar'), limit=2):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '#0 = :0',
-    #             'FilterExpression': 'begins_with (#1, :1)',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'email',
-    #                 '#1': 'user_name'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 }
-    #             },
-    #             'IndexName': 'custom_idx_name',
-    #             'TableName': 'IndexedModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 2
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
-    #
-    #     Note this test is incorrect as 'user_name' is not the range key for email_index.
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         for item in await IndexedModel.email_index.query('foo', limit=2, user_name__begins_with='bar'):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'email',
-    #                 '#1': 'user_name'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 }
-    #             },
-    #             'IndexName': 'custom_idx_name',
-    #             'TableName': 'IndexedModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 2
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         async for item in await LocalIndexedModel.email_index.query(
-    #                 'foo',
-    #                 LocalIndexedModel.user_name.startswith('bar') & LocalIndexedModel.aliases.contains(1),
-    #                 limit=1):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '#0 = :0',
-    #             'FilterExpression': '(begins_with (#1, :1) AND contains (#2, :2))',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'email',
-    #                 '#1': 'user_name',
-    #                 '#2': 'aliases'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 },
-    #                 ':2': {
-    #                     'S': '1'
-    #                 }
-    #             },
-    #             'IndexName': 'email_index',
-    #             'TableName': 'LocalIndexedModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 1
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
-    #
-    #     # Note this test is incorrect as 'user_name' is not the range key for email_index.
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         for item in await LocalIndexedModel.email_index.query(
-    #                 'foo',
-    #                 limit=1,
-    #                 user_name__begins_with='bar',
-    #                 aliases__contains=1):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
-    #             'FilterExpression': 'contains (#2, :2)',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'email',
-    #                 '#1': 'user_name',
-    #                 '#2': 'aliases'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 },
-    #                 ':2': {
-    #                     'S': '1'
-    #                 }
-    #             },
-    #             'IndexName': 'email_index',
-    #             'TableName': 'LocalIndexedModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 1
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
-    #
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         for item in await CustomAttrNameModel.uid_index.query(
-    #                 'foo',
-    #                 CustomAttrNameModel.overidden_user_name.startswith('bar'),
-    #                 limit=2):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '#0 = :0',
-    #             'FilterExpression': 'begins_with (#1, :1)',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'user_id',
-    #                 '#1': 'user_name'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 }
-    #             },
-    #             'IndexName': 'uid_index',
-    #             'TableName': 'CustomAttrModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 2
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
-    #
-    #     # Note: this test is incorrect since uid_index has no range key
-    #     with patch(PATCH_METHOD) as req:
-    #         items = []
-    #         for idx in range(10):
-    #             item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-    #             item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-    #             items.append(item)
-    #         req.return_value = {'Count': len(items), 'Items': items}
-    #         queried = []
-    #
-    #         for item in await CustomAttrNameModel.uid_index.query('foo', limit=2, overidden_user_name__begins_with='bar'):
-    #             queried.append(item._serialize())
-    #
-    #         params = {
-    #             'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
-    #             'ExpressionAttributeNames': {
-    #                 '#0': 'user_id',
-    #                 '#1': 'user_name'
-    #             },
-    #             'ExpressionAttributeValues': {
-    #                 ':0': {
-    #                     'S': u'foo'
-    #                 },
-    #                 ':1': {
-    #                     'S': u'bar'
-    #                 }
-    #             },
-    #             'IndexName': 'uid_index',
-    #             'TableName': 'CustomAttrModel',
-    #             'ReturnConsumedCapacity': 'TOTAL',
-    #             'Limit': 2
-    #         }
-    #         self.assertEqual(req.call_args[0][1], params)
+    @pytest.mark.asyncio
+    async def test_index_queries(self):
+        """
+        Model.Index.Query
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CUSTOM_ATTR_NAME_INDEX_TABLE_DATA
+            await CustomAttrNameModel._get_meta_data()
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = INDEX_TABLE_DATA
+            await IndexedModel._get_connection().describe_table()
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = LOCAL_INDEX_TABLE_DATA
+            await LocalIndexedModel._get_meta_data()
+
+        self.assertEqual(IndexedModel.include_index.Meta.index_name, "non_key_idx")
+
+        queried = []
+        with patch(PATCH_METHOD) as req:
+            with self.assertRaises(ValueError):
+                for item in await IndexedModel.email_index.query('foo', user_id__between=['id-1', 'id-3']):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            with self.assertRaises(ValueError):
+                for item in await IndexedModel.email_index.query('foo', user_name__startswith='foo'):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            with self.assertRaises(ValueError):
+                for item in await IndexedModel.email_index.query('foo', name='foo'):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            async for item in await IndexedModel.email_index.query('foo', IndexedModel.user_name.startswith('bar'), limit=2):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': 'begins_with (#1, :1)',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'custom_idx_name',
+                'TableName': 'IndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note this test is incorrect as 'user_name' is not the range key for email_index.
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            for item in await IndexedModel.email_index.query('foo', limit=2, user_name__begins_with='bar'):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'custom_idx_name',
+                'TableName': 'IndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            async for item in await LocalIndexedModel.email_index.query(
+                    'foo',
+                    LocalIndexedModel.user_name.startswith('bar') & LocalIndexedModel.aliases.contains(1),
+                    limit=1):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': '(begins_with (#1, :1) AND contains (#2, :2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name',
+                    '#2': 'aliases'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    },
+                    ':2': {
+                        'S': '1'
+                    }
+                },
+                'IndexName': 'email_index',
+                'TableName': 'LocalIndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 1
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note this test is incorrect as 'user_name' is not the range key for email_index.
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            for item in await LocalIndexedModel.email_index.query(
+                    'foo',
+                    limit=1,
+                    user_name__begins_with='bar',
+                    aliases__contains=1):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'FilterExpression': 'contains (#2, :2)',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name',
+                    '#2': 'aliases'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    },
+                    ':2': {
+                        'S': '1'
+                    }
+                },
+                'IndexName': 'email_index',
+                'TableName': 'LocalIndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 1
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            for item in await CustomAttrNameModel.uid_index.query(
+                    'foo',
+                    CustomAttrNameModel.overidden_user_name.startswith('bar'),
+                    limit=2):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': 'begins_with (#1, :1)',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note: this test is incorrect since uid_index has no range key
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            queried = []
+
+            async for item in await CustomAttrNameModel.uid_index.query('foo', limit=2, overidden_user_name__begins_with='bar'):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
 
     @pytest.mark.asyncio
     async def test_multiple_indices_share_non_key_attribute(self):
@@ -2620,3 +2635,989 @@ class ModelTestCase(TestCase):
             args = req.call_args[0][1]
             for key in ['KeySchema', 'AttributeDefinitions', 'LocalSecondaryIndexes', 'GlobalSecondaryIndexes']:
                 self.assert_dict_lists_equal(args[key], params[key])
+
+    @pytest.mark.asyncio
+    async def test_global_index(self):
+        """
+        Models.GlobalSecondaryIndex
+        """
+        self.assertIsNotNone(IndexedModel.email_index._hash_key_attribute())
+        self.assertEqual(IndexedModel.email_index.Meta.projection.projection_type, AllProjection.projection_type)
+        with patch(PATCH_METHOD) as req:
+            req.return_value = INDEX_TABLE_DATA
+            with self.assertRaises(ValueError):
+                await IndexedModel.initialize('foo', 'bar')
+            await IndexedModel._get_meta_data()
+
+        scope_args = {'count': 0}
+
+        def fake_dynamodb(*args, **kwargs):
+            if scope_args['count'] == 0:
+                scope_args['count'] += 1
+                raise ClientError({'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}},
+                                  "DescribeTable")
+            else:
+                return {}
+
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            await IndexedModel.create_table(read_capacity_units=2, write_capacity_units=2)
+            params = {
+                'AttributeDefinitions': [
+                    {'attribute_name': 'email', 'attribute_type': 'S'},
+                    {'attribute_name': 'numbers', 'attribute_type': 'NS'}
+                ],
+                'KeySchema': [
+                    {'AttributeName': 'numbers', 'KeyType': 'RANGE'},
+                    {'AttributeName': 'email', 'KeyType': 'HASH'}
+                ]
+            }
+            schema = IndexedModel.email_index._get_schema()
+            args = req.call_args[0][1]
+            self.assertEqual(
+                args['GlobalSecondaryIndexes'][0]['ProvisionedThroughput'],
+                {
+                    'ReadCapacityUnits': 2,
+                    'WriteCapacityUnits': 1
+                }
+            )
+            self.assert_dict_lists_equal(schema['key_schema'], params['KeySchema'])
+            self.assert_dict_lists_equal(schema['attribute_definitions'], params['AttributeDefinitions'])
+
+    @pytest.mark.asyncio
+    async def test_local_index(self):
+        """
+        Models.LocalSecondaryIndex
+        """
+        with self.assertRaises(ValueError):
+            with patch(PATCH_METHOD) as req:
+                req.return_value = LOCAL_INDEX_TABLE_DATA
+                # This table has no range key
+                await LocalIndexedModel.initialize('foo', 'bar')
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = LOCAL_INDEX_TABLE_DATA
+            await LocalIndexedModel.initialize('foo')
+
+        schema = IndexedModel._get_indexes()
+
+        expected = {
+            'local_secondary_indexes': [
+                {
+                    'KeySchema': [
+                        {'KeyType': 'HASH', 'AttributeName': 'email'},
+                        {'KeyType': 'RANGE', 'AttributeName': 'numbers'}
+                    ],
+                    'IndexName': 'include_index',
+                    'projection': {
+                        'ProjectionType': 'INCLUDE',
+                        'NonKeyAttributes': ['numbers']
+                    }
+                }
+            ],
+            'global_secondary_indexes': [
+                {
+                    'KeySchema': [
+                        {'KeyType': 'HASH', 'AttributeName': 'email'},
+                        {'KeyType': 'RANGE', 'AttributeName': 'numbers'}
+                    ],
+                    'IndexName': 'email_index',
+                    'projection': {'ProjectionType': 'ALL'},
+                    'provisioned_throughput': {
+                        'WriteCapacityUnits': 1,
+                        'ReadCapacityUnits': 2
+                    }
+                }
+            ],
+            'attribute_definitions': [
+                {'attribute_type': 'S', 'attribute_name': 'email'},
+                {'attribute_type': 'NS', 'attribute_name': 'numbers'},
+                {'attribute_type': 'S', 'attribute_name': 'email'},
+                {'attribute_type': 'NS', 'attribute_name': 'numbers'}
+            ]
+        }
+        self.assert_dict_lists_equal(
+            schema['attribute_definitions'],
+            expected['attribute_definitions']
+        )
+        self.assertEqual(schema['local_secondary_indexes'][0]['projection']['ProjectionType'], 'INCLUDE')
+        self.assertEqual(schema['local_secondary_indexes'][0]['projection']['NonKeyAttributes'], ['numbers'])
+
+        scope_args = {'count': 0}
+
+        def fake_dynamodb(*args, **kwargs):
+            if scope_args['count'] == 0:
+                scope_args['count'] += 1
+                raise ClientError({'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}},
+                                  "DescribeTable")
+            else:
+                return {}
+
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            await LocalIndexedModel.create_table(read_capacity_units=2, write_capacity_units=2)
+            params = {
+                'AttributeDefinitions': [
+                    {
+                        'attribute_name': 'email', 'attribute_type': 'S'
+                    },
+                    {
+                        'attribute_name': 'numbers',
+                        'attribute_type': 'NS'
+                    }
+                ],
+                'KeySchema': [
+                    {
+                        'AttributeName': 'email', 'KeyType': 'HASH'
+                    },
+                    {
+                        'AttributeName': 'numbers', 'KeyType': 'RANGE'
+                    }
+                ]
+            }
+            schema = LocalIndexedModel.email_index._get_schema()
+            args = req.call_args[0][1]
+            self.assert_dict_lists_equal(schema['attribute_definitions'], params['AttributeDefinitions'])
+            self.assert_dict_lists_equal(schema['key_schema'], params['KeySchema'])
+            self.assertTrue('ProvisionedThroughput' not in args['LocalSecondaryIndexes'][0])
+
+    @fail_on(unused_loop=False)
+    def test_projections(self):
+        """
+        Models.Projection
+        """
+        projection = AllProjection()
+        self.assertEqual(projection.projection_type, ALL)
+
+        projection = KeysOnlyProjection()
+        self.assertEqual(projection.projection_type, KEYS_ONLY)
+
+        projection = IncludeProjection(non_attr_keys=['foo', 'bar'])
+        self.assertEqual(projection.projection_type, INCLUDE)
+        self.assertEqual(projection.non_key_attributes, ['foo', 'bar'])
+
+        self.assertRaises(ValueError, IncludeProjection, None)
+
+        with self.assertRaises(ValueError):
+            class BadIndex(Index):
+                pass
+
+            BadIndex()
+
+        with self.assertRaises(ValueError):
+            class BadIndex(Index):
+                class Meta:
+                    pass
+
+                pass
+
+            BadIndex()
+
+    @pytest.mark.asyncio
+    async def test_old_style_model_exception(self):
+        """
+        Display warning for pre v1.0 Models
+        """
+        with self.assertRaises(AttributeError):
+            await OldStyleModel._get_meta_data()
+
+        with self.assertRaises(AttributeError):
+            await OldStyleModel.exists()
+
+    async def test_dumps(self):
+        """
+        Model.dumps
+        """
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'email-{0}'.format(random.randint(0, 65536))}
+                item['picture'] = {BINARY_SHORT: BINARY_ATTR_DATA}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            content = await UserModel.dumps()
+            serialized_items = json.loads(content)
+            for original, new_item in zip(items, serialized_items):
+                self.assertEqual(new_item[0], original['user_name'][STRING_SHORT])
+                self.assertEqual(new_item[1][pythonic(ATTRIBUTES)]['zip_code']['N'], original['zip_code']['N'])
+                self.assertEqual(new_item[1][pythonic(ATTRIBUTES)]['email']['S'], original['email']['S'])
+                self.assertEqual(new_item[1][pythonic(ATTRIBUTES)]['picture']['B'], original['picture']['B'])
+
+    @pytest.mark.asyncio
+    async def test_loads(self):
+        """
+        Model.loads
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            await UserModel.loads(json.dumps(SERIALIZED_TABLE_DATA))
+
+        args = {
+            'UserModel': [
+                {
+                    'PutRequest': {
+                        'Item': {
+                            'user_id': {'S': u'id-0'},
+                            'callable_field': {'N': '42'},
+                            'user_name': {'S': u'foo'},
+                            'email': {'S': u'email-7980'},
+                            'picture': {
+                                "B": "aGVsbG8sIHdvcmxk"
+                            },
+                            'zip_code': {'N': '88030'}
+                        }
+                    }
+                },
+                {
+                    'PutRequest': {
+                        'Item': {
+                            'user_id': {'S': u'id-1'},
+                            'callable_field': {'N': '42'},
+                            'user_name': {'S': u'foo'},
+                            'email': {'S': u'email-19770'},
+                            'picture': {
+                                "B": "aGVsbG8sIHdvcmxk"
+                            },
+                            'zip_code': {'N': '88030'}
+                        }
+                    }
+                }
+            ]
+        }
+
+        self.assert_dict_lists_equal(req.call_args[0][1]['RequestItems']['UserModel'], args['UserModel'])
+
+    @pytest.mark.asyncio
+    async def test_loads_complex_model(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            await ComplexModel.loads(json.dumps(COMPLEX_MODEL_SERIALIZED_TABLE_DATA))
+
+        args = {
+            'ComplexModel': [
+                {
+                    'PutRequest': COMPLEX_MODEL_ITEM_DATA
+                }
+            ]
+        }
+        self.assert_dict_lists_equal(req.call_args[0][1]['RequestItems']['ComplexModel'], args['ComplexModel'])
+
+    async def _get_office_employee(self):
+        justin = Person(
+            fname='Justin',
+            lname='Phillips',
+            age=31,
+            is_male=True
+        )
+
+        loc = Location(
+            lat=37.77461,
+            lng=-122.3957216,
+            name='Lyft HQ'
+        )
+
+        return await OfficeEmployee.initialize(
+            hash_key=None,
+            range_key=None,
+            office_employee_id=123,
+            person=justin,
+            office_location=loc
+        )
+
+    async def _get_grocery_list(self):
+        return await GroceryList.initialize(store_name='Haight Street Market',
+                                            groceries=['bread', 1, 'butter', 6, 'milk', 1])
+
+    async def _get_complex_thing(self):
+        justin = Person(
+            fname='Justin',
+            lname='Phillips',
+            age=31,
+            is_male=True
+        )
+        return await ComplexModel.initialize(person=justin, key=123)
+
+    async def _get_office(self):
+        justin = Person(
+            fname='Justin',
+            lname='Phillips',
+            age=31,
+            is_male=True
+        )
+        lei = Person(
+            fname='Lei',
+            lname='Ding',
+            age=32,
+            is_male=True
+        )
+        garrett = Person(
+            fname='Garrett',
+            lname='Heel',
+            age=30,
+            is_male=True
+        )
+        tanya = Person(
+            fname='Tanya',
+            lname='Ashkenazi',
+            age=30,
+            is_male=False
+        )
+        loc = Location(
+            lat=37.77461,
+            lng=-122.3957216,
+            name='Lyft HQ'
+        )
+        emp1 = OfficeEmployeeMap(
+            office_employee_id=123,
+            person=justin,
+            office_location=loc
+        )
+        emp2 = OfficeEmployeeMap(
+            office_employee_id=124,
+            person=lei,
+            office_location=loc
+        )
+        emp3 = OfficeEmployeeMap(
+            office_employee_id=125,
+            person=garrett,
+            office_location=loc
+        )
+        emp4 = OfficeEmployeeMap(
+            office_employee_id=126,
+            person=tanya,
+            office_location=loc
+        )
+        return await Office.initialize(
+            office_id=3,
+            address=loc,
+            employees=[emp1, emp2, emp3, emp4]
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_with_maps(self):
+        office_employee = await self._get_office_employee()
+        with patch(PATCH_METHOD) as req:
+            req.return_value = OFFICE_EMPLOYEE_MODEL_TABLE_DATA
+            await office_employee.save()
+
+    @pytest.mark.asyncio
+    async def test_model_with_list(self):
+        grocery_list = await self._get_grocery_list()
+        with patch(PATCH_METHOD) as req:
+            req.return_value = GROCERY_LIST_MODEL_TABLE_DATA
+            await grocery_list.save()
+
+    @pytest.mark.asyncio
+    async def test_model_with_list_of_map(self):
+        item = await self._get_office()
+        with patch(PATCH_METHOD) as req:
+            req.return_value = OFFICE_MODEL_TABLE_DATA
+            await item.save()
+
+    @pytest.mark.asyncio
+    async def test_model_with_nulls_validates(self):
+        car_info = CarInfoMap(make='Dodge')
+        item = await CarModel.initialize(car_id=123, car_info=car_info)
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CAR_MODEL_WITH_NULL_ITEM_DATA
+            await item.save()
+
+    @pytest.mark.asyncio
+    async def test_model_with_invalid_data_does_not_validate(self):
+        car_info = CarInfoMap(model='Envoy')
+        item = await CarModel.initialize(car_id=123, car_info=car_info)
+        with patch(PATCH_METHOD) as req:
+            req.return_value = INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA
+            with self.assertRaises(ValueError):
+                await item.save()
+
+    @pytest.mark.asyncio
+    async def test_model_works_like_model(self):
+        office_employee = await self._get_office_employee()
+        self.assertTrue(office_employee.person)
+        self.assertEquals('Justin', office_employee.person.fname)
+        self.assertEquals('Phillips', office_employee.person.lname)
+        self.assertEquals(31, office_employee.person.age)
+        self.assertEquals(True, office_employee.person.is_male)
+
+    @pytest.mark.asyncio
+    async def test_list_works_like_list(self):
+        grocery_list = await self._get_grocery_list()
+        self.assertTrue(grocery_list.groceries)
+        self.assertEquals('butter', grocery_list.groceries[2])
+
+    @pytest.mark.asyncio
+    async def test_complex_model_is_complex(self):
+        complex_thing = await self._get_complex_thing()
+        self.assertTrue(complex_thing.person)
+        self.assertEquals(complex_thing.person.fname, 'Justin')
+        self.assertEquals(complex_thing.key, 123)
+
+    @pytest.mark.asyncio
+    async def test_list_of_map_works_like_list_of_map(self):
+        office = await self._get_office()
+        self.assertTrue(office.employees[1].person.is_male)
+        self.assertFalse(office.employees[3].person.is_male)
+        self.assertEquals(office.employees[2].person.fname, 'Garrett')
+        self.assertEquals(office.employees[0].person.lname, 'Phillips')
+
+    @pytest.mark.asyncio
+    async def test_invalid_map_model_raises(self):
+        fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
+                                       FULL_CAR_MODEL_ITEM_DATA, 'car_id', 'N', '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            with self.assertRaises(ValueError):
+                await (await CarModel.initialize(car_id=2)).save()
+            try:
+                await (await CarModel.initialize(car_id=2)).save()
+            except ValueError as e:
+                assert str(e) == "Attribute 'car_info' cannot be None"
+
+    @pytest.mark.asyncio
+    async def test_model_with_maps_retrieve_from_db(self):
+        fake_db = self.database_mocker(OfficeEmployee, OFFICE_EMPLOYEE_MODEL_TABLE_DATA,
+                                       GET_OFFICE_EMPLOYEE_ITEM_DATA, 'office_employee_id', 'N', '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = GET_OFFICE_EMPLOYEE_ITEM_DATA
+            item = await OfficeEmployee.get(123)
+            self.assertEqual(
+                item.person.fname,
+                GET_OFFICE_EMPLOYEE_ITEM_DATA.get(ITEM).get('person').get(
+                    MAP_SHORT).get('firstName').get(STRING_SHORT))
+
+    @pytest.mark.asyncio
+    async def test_model_with_maps_with_nulls_retrieve_from_db(self):
+        fake_db = self.database_mocker(OfficeEmployee, OFFICE_EMPLOYEE_MODEL_TABLE_DATA,
+                                       GET_OFFICE_EMPLOYEE_ITEM_DATA_WITH_NULL, 'office_employee_id', 'N',
+                                 '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = GET_OFFICE_EMPLOYEE_ITEM_DATA_WITH_NULL
+            item = await OfficeEmployee.get(123)
+            self.assertEqual(
+                item.person.fname,
+                GET_OFFICE_EMPLOYEE_ITEM_DATA_WITH_NULL.get(ITEM).get('person').get(
+                    MAP_SHORT).get('firstName').get(STRING_SHORT))
+            self.assertIsNone(item.person.age)
+            self.assertIsNone(item.person.is_male)
+
+    @pytest.mark.asyncio
+    async def test_model_with_maps_with_pythonic_attributes(self):
+        fake_db = self.database_mocker(
+            OfficeEmployee,
+            OFFICE_EMPLOYEE_MODEL_TABLE_DATA,
+            GET_OFFICE_EMPLOYEE_ITEM_DATA,
+            'office_employee_id',
+            'N',
+            '123'
+        )
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = GET_OFFICE_EMPLOYEE_ITEM_DATA
+            item = await OfficeEmployee.get(123)
+            self.assertEqual(
+                item.person.fname,
+                GET_OFFICE_EMPLOYEE_ITEM_DATA
+                    .get(ITEM)
+                    .get('person')
+                    .get(MAP_SHORT)
+                    .get('firstName')
+                    .get(STRING_SHORT)
+            )
+        assert item.person.is_male
+        with pytest.raises(AttributeError):
+            item.person.is_dude
+
+    @pytest.mark.asyncio
+    async def test_model_with_list_retrieve_from_db(self):
+        fake_db = self.database_mocker(GroceryList, GROCERY_LIST_MODEL_TABLE_DATA,
+                                       GET_GROCERY_LIST_ITEM_DATA, 'store_name', 'S',
+                                 'Haight Street Market')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = GET_GROCERY_LIST_ITEM_DATA
+            item = await GroceryList.get('Haight Street Market')
+            self.assertEquals(item.store_name, GET_GROCERY_LIST_ITEM_DATA.get(ITEM).get('store_name').get(STRING_SHORT))
+            self.assertEquals(
+                item.groceries[2],
+                GET_GROCERY_LIST_ITEM_DATA.get(ITEM).get('groceries').get(
+                    LIST_SHORT)[2].get(STRING_SHORT))
+            self.assertEquals(item.store_name, 'Haight Street Market')
+
+    @pytest.mark.asyncio
+    async def test_model_with_list_of_map_retrieve_from_db(self):
+        fake_db = self.database_mocker(Office, OFFICE_MODEL_TABLE_DATA,
+                                       GET_OFFICE_ITEM_DATA, 'office_id', 'N', '6161')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = GET_OFFICE_ITEM_DATA
+            item = await Office.get(6161)
+            self.assertEquals(item.office_id,
+                              int(GET_OFFICE_ITEM_DATA.get(ITEM).get('office_id').get(NUMBER_SHORT)))
+            self.assertEquals(item.office_id, 6161)
+            self.assertEquals(
+                item.employees[2].person.fname,
+                GET_OFFICE_ITEM_DATA.get(ITEM).get('employees').get(
+                    LIST_SHORT)[2].get(MAP_SHORT).get('person').get(MAP_SHORT).get('firstName').get(STRING_SHORT))
+
+    @pytest.mark.asyncio
+    async def test_complex_model_retrieve_from_db(self):
+        fake_db = self.database_mocker(ComplexModel, COMPLEX_MODEL_TABLE_DATA,
+                                       COMPLEX_MODEL_ITEM_DATA, 'key', 'N',
+                                 '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = COMPLEX_MODEL_ITEM_DATA
+            item = await ComplexModel.get(123)
+            self.assertEquals(item.key,
+                              int(COMPLEX_MODEL_ITEM_DATA.get(ITEM).get(
+                                  'key').get(NUMBER_SHORT)))
+            self.assertEquals(item.key, 123)
+            self.assertEquals(
+                item.person.fname,
+                COMPLEX_MODEL_ITEM_DATA.get(ITEM).get('weird_person').get(
+                    MAP_SHORT).get('firstName').get(STRING_SHORT))
+
+    def database_mocker(self, model, table_data, item_data,
+                        primary_key_name, primary_key_dynamo_type, primary_key_id):
+        def fake_dynamodb(*args):
+            kwargs = args[1]
+            if kwargs == {'TableName': model.Meta.table_name}:
+                return table_data
+            elif kwargs == {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'TableName': model.Meta.table_name,
+                'Key': {
+                    primary_key_name: {primary_key_dynamo_type: primary_key_id},
+                },
+                'ConsistentRead': False}:
+                return item_data
+            return table_data
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+        return fake_db
+
+    @pytest.mark.asyncio
+    async def test_car_model_retrieve_from_db(self):
+        fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
+                                       FULL_CAR_MODEL_ITEM_DATA, 'car_id', 'N', '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = FULL_CAR_MODEL_ITEM_DATA
+            item = await CarModel.get(123)
+            self.assertEquals(item.car_id,
+                              int(FULL_CAR_MODEL_ITEM_DATA.get(ITEM).get(
+                                  'car_id').get(NUMBER_SHORT)))
+            self.assertEquals(item.car_info.make, 'Volkswagen')
+            self.assertEquals(item.car_info.model, 'Beetle')
+
+    @pytest.mark.asyncio
+    async def test_car_model_with_null_retrieve_from_db(self):
+        fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
+                                       CAR_MODEL_WITH_NULL_ITEM_DATA, 'car_id', 'N',
+                                 '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = CAR_MODEL_WITH_NULL_ITEM_DATA
+            item = await CarModel.get(123)
+            self.assertEquals(item.car_id,
+                              int(CAR_MODEL_WITH_NULL_ITEM_DATA.get(ITEM).get(
+                                  'car_id').get(NUMBER_SHORT)))
+            self.assertEquals(item.car_info.make, 'Dodge')
+            self.assertIsNone(item.car_info.model)
+
+    @pytest.mark.asyncio
+    async def test_invalid_car_model_with_null_retrieve_from_db(self):
+        fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
+                                       INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA, 'car_id', 'N',
+                                 '123')
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA
+            item = await CarModel.get(123)
+            self.assertEquals(item.car_id,
+                              int(INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA.get(ITEM).get(
+                                  'car_id').get(NUMBER_SHORT)))
+            self.assertIsNone(item.car_info.make)
+
+    @pytest.mark.asyncio
+    async def test_new_style_boolean_serializes_as_bool(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_TABLE_DATA
+            item = await BooleanConversionModel.initialize(user_name='justin', is_human=True)
+            item.save()
+
+    @pytest.mark.asyncio
+    async def test_old_style_boolean_serializes_as_bool(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_TABLE_DATA_OLD_STYLE
+            item = await BooleanConversionModel.initialize(user_name='justin', is_human=True)
+            item.save()
+
+    @pytest.mark.asyncio
+    async def test_deserializing_old_style_bool_false_works(self):
+        fake_db = self.database_mocker(BooleanConversionModel, BOOLEAN_CONVERSION_MODEL_TABLE_DATA,
+                                       BOOLEAN_CONVERSION_MODEL_OLD_STYLE_FALSE_ITEM_DATA,
+                                 'user_name', 'S',
+                                 'alf')
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_OLD_STYLE_FALSE_ITEM_DATA
+            item = await BooleanConversionModel.get('alf')
+            self.assertFalse(item.is_human)
+
+    @pytest.mark.asyncio
+    async def test_deserializing_old_style_bool_true_works(self):
+        fake_db = self.database_mocker(BooleanConversionModel,
+                                       BOOLEAN_CONVERSION_MODEL_TABLE_DATA,
+                                       BOOLEAN_CONVERSION_MODEL_OLD_STYLE_TRUE_ITEM_DATA,
+                                 'user_name', 'S',
+                                 'justin')
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_OLD_STYLE_TRUE_ITEM_DATA
+            item = await BooleanConversionModel.get('justin')
+            self.assertTrue(item.is_human)
+
+    @pytest.mark.asyncio
+    async def test_deserializing_new_style_bool_false_works(self):
+        fake_db = self.database_mocker(BooleanConversionModel,
+                                       BOOLEAN_CONVERSION_MODEL_TABLE_DATA,
+                                       BOOLEAN_CONVERSION_MODEL_NEW_STYLE_FALSE_ITEM_DATA,
+                                 'user_name', 'S',
+                                 'alf')
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_NEW_STYLE_FALSE_ITEM_DATA
+            item = await BooleanConversionModel.get('alf')
+            self.assertFalse(item.is_human)
+
+    @pytest.mark.asyncio
+    async def test_deserializing_new_style_bool_true_works(self):
+        fake_db = self.database_mocker(BooleanConversionModel,
+                                       BOOLEAN_CONVERSION_MODEL_TABLE_DATA,
+                                       BOOLEAN_CONVERSION_MODEL_NEW_STYLE_TRUE_ITEM_DATA,
+                                 'user_name', 'S',
+                                 'justin')
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = BOOLEAN_CONVERSION_MODEL_NEW_STYLE_TRUE_ITEM_DATA
+            item = await BooleanConversionModel.get('justin')
+            self.assertTrue(item.is_human)
+
+    @pytest.mark.asyncio
+    async def test_deserializing_map_four_layers_deep_works(self):
+        fake_db = self.database_mocker(TreeModel,
+                                       TREE_MODEL_TABLE_DATA,
+                                       TREE_MODEL_ITEM_DATA,
+                                 'tree_key', 'S',
+                                 '123')
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            req.return_value = TREE_MODEL_ITEM_DATA
+            item = await TreeModel.get('123')
+            self.assertEquals(item.left.left.left.value, 3)
+
+    @pytest.mark.asyncio
+    async def test_conditional_operator_map_attribute(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            item = await self._get_complex_thing()
+            with self.assertRaises(NotImplementedError):
+                await item.save(key=123, conditional_operator='OR')
+            with self.assertRaises(NotImplementedError):
+                await item.delete(key=123, conditional_operator='OR')
+            with self.assertRaises(NotImplementedError):
+                await item.update_item(123, conditional_operator='OR')
+            with self.assertRaises(NotImplementedError):
+                list(await ComplexModel.query(123, limit=20, conditional_operator='OR'))
+            with self.assertRaises(NotImplementedError):
+                list(ComplexModel.scan(conditional_operator='OR'))
+
+    @pytest.mark.asyncio
+    async def test_result_set_init(self):
+        results = []
+        operations = 1
+        arguments = 'args'
+        rs = ResultSet(results=results, operation=operations, arguments=arguments)
+        self.assertEquals(rs.results, results)
+        self.assertEquals(rs.operation, operations)
+        self.assertEquals(rs.arguments, arguments)
+
+    @pytest.mark.asyncio
+    async def test_result_set_iter(self):
+        results = [1, 2, 3]
+        operations = 1
+        arguments = 'args'
+        rs = ResultSet(results=results, operation=operations, arguments=arguments)
+        for k in rs:
+            self.assertTrue(k in results)
+
+    @pytest.mark.asyncio
+    async def test_explicit_raw_map_serialize_pass(self):
+        map_native = {'foo': 'bar'}
+        map_serialized = {'M': {'foo': {'S': 'bar'}}}
+        instance = await ExplicitRawMapModel.initialize(map_attr=map_native)
+        serialized = instance._serialize()
+        self.assertEqual(serialized['attributes']['map_attr'], map_serialized)
+
+    @pytest.mark.asyncio
+    async def test_raw_map_serialize_fun_one(self):
+        map_native = {
+            'foo': 'bar', 'num': 12345678909876543211234234324234, 'bool_type': True,
+            'other_b_type': False, 'floaty': 1.2, 'listy': [1,2,3],
+            'mapy': {'baz': 'bongo'}
+        }
+        expected = {'M': {'foo': {'S': u'bar'},
+               'listy': {'L': [{'N': '1'}, {'N': '2'}, {'N': '3'}]},
+               'num': {'N': '12345678909876543211234234324234'}, 'other_b_type': {'BOOL': False},
+               'floaty': {'N': '1.2'}, 'mapy': {'M': {'baz': {'S': u'bongo'}}},
+               'bool_type': {'BOOL': True}}}
+
+        instance = await ExplicitRawMapModel.initialize(map_attr=map_native)
+        serialized = instance._serialize()
+        actual = serialized['attributes']['map_attr']
+        self.assertEqual(expected, actual)
+
+    @pytest.mark.asyncio
+    async def test_raw_map_deserializes(self):
+        map_native = {
+            'foo': 'bar', 'num': 1, 'bool_type': True,
+            'other_b_type': False, 'floaty': 1.2, 'listy': [1, 2, 12345678909876543211234234324234],
+            'mapy': {'baz': 'bongo'}
+        }
+        map_serialized = {
+            'M': {
+                'foo': {'S': 'bar'},
+                'num': {'N': '1'},
+                'bool_type': {'BOOL': True},
+                'other_b_type': {'BOOL': False},
+                'floaty': {'N': '1.2'},
+                'listy': {'L': [{'N': '1'}, {'N': '2'}, {'N': '12345678909876543211234234324234'}]},
+                'mapy': {'M': {'baz': {'S': 'bongo'}}}
+            }
+        }
+        instance = await ExplicitRawMapModel.initialize()
+        instance._deserialize({'map_attr': map_serialized})
+        actual = instance.map_attr
+        for k, v in six.iteritems(map_native):
+            self.assertEqual(v, actual[k])
+
+    @pytest.mark.asyncio
+    async def test_raw_map_from_raw_data_works(self):
+        map_native = {
+            'foo': 'bar', 'num': 1, 'bool_type': True,
+            'other_b_type': False, 'floaty': 1.2, 'listy': [1, 2, 12345678909876543211234234324234],
+            'mapy': {'baz': 'bongo'}
+        }
+        fake_db = self.database_mocker(ExplicitRawMapModel,
+                                       EXPLICIT_RAW_MAP_MODEL_TABLE_DATA,
+                                       EXPLICIT_RAW_MAP_MODEL_ITEM_DATA,
+                                       'map_id', 'N',
+                                       '123')
+        with patch(PATCH_METHOD, new=fake_db):
+            item = await ExplicitRawMapModel.get(123)
+            actual = item.map_attr
+            self.assertEqual(map_native.get('listy')[2], actual['listy'][2])
+            for k, v in six.iteritems(map_native):
+                self.assertEqual(v, actual[k])
+
+    @pytest.mark.asyncio
+    async def test_raw_map_as_sub_map_serialize_pass(self):
+        map_native = {'a': 'dict', 'lives': [123, 456], 'here': True}
+        map_serialized = {
+            'M': {
+                'a': {'S': 'dict'},
+                'lives': {'L': [{'N': '123'}, {'N': '456'}]},
+                'here': {'BOOL': True}
+            }
+        }
+        instance = await ExplicitRawMapAsMemberOfSubClass.initialize(
+            map_id=123,
+            sub_attr=MapAttrSubClassWithRawMapAttr(
+                num_field=37, str_field='hi',
+                map_field=map_native
+            )
+        )
+        serialized = instance._serialize()
+        self.assertEqual(serialized['attributes']['sub_attr']['M']['map_field'], map_serialized)
+
+    async def _get_raw_map_as_sub_map_test_data(self):
+        map_native = {
+            'foo': 'bar', 'num': 1, 'bool_type': True,
+            'other_b_type': False, 'floaty': 1.2, 'listy': [1, 2, 3],
+            'mapy': {'baz': 'bongo'}
+        }
+        map_serialized = {
+            'M': {
+                'foo': {'S': 'bar'},
+                'num': {'N': '1'},
+                'bool_type': {'BOOL': True},
+                'other_b_type': {'BOOL': False},
+                'floaty': {'N': '1.2'},
+                'listy': {'L': [{'N': '1'}, {'N': '2'}, {'N': '3'}]},
+                'mapy': {'M': {'baz': {'S': 'bongo'}}}
+            }
+        }
+
+        sub_attr = MapAttrSubClassWithRawMapAttr(
+            num_field=37, str_field='hi', map_field=map_native
+        )
+
+        instance = await ExplicitRawMapAsMemberOfSubClass.initialize(
+            map_id=123,
+            sub_attr=sub_attr
+        )
+        return map_native, map_serialized, sub_attr, instance
+
+    @pytest.mark.asyncio
+    async def test_raw_map_as_sub_map(self):
+        map_native, map_serialized, sub_attr, instance = await self._get_raw_map_as_sub_map_test_data()
+        actual = instance.sub_attr
+        self.assertEqual(sub_attr, actual)
+        self.assertEqual(actual.map_field['floaty'], map_native.get('floaty'))
+        self.assertEqual(actual.map_field['mapy']['baz'], map_native.get('mapy').get('baz'))
+
+    @pytest.mark.asyncio
+    async def test_raw_map_as_sub_map_deserialize(self):
+        map_native, map_serialized, _, _ = await self._get_raw_map_as_sub_map_test_data()
+
+        actual = MapAttrSubClassWithRawMapAttr().deserialize({
+            "map_field": map_serialized
+        })
+
+        for k, v in six.iteritems(map_native):
+            self.assertEqual(actual.map_field[k], v)
+
+    @pytest.mark.asyncio
+    async def test_raw_map_as_sub_map_from_raw_data_works(self):
+        map_native, map_serialized, sub_attr, instance = await self._get_raw_map_as_sub_map_test_data()
+        fake_db = self.database_mocker(ExplicitRawMapAsMemberOfSubClass,
+                                       EXPLICIT_RAW_MAP_MODEL_AS_SUB_MAP_IN_TYPED_MAP_TABLE_DATA,
+                                       EXPLICIT_RAW_MAP_MODEL_AS_SUB_MAP_IN_TYPED_MAP_ITEM_DATA,
+                                       'map_id', 'N',
+                                       '123')
+        with patch(PATCH_METHOD, new=fake_db):
+            item = await ExplicitRawMapAsMemberOfSubClass.get(123)
+            actual = item.sub_attr
+            self.assertEqual(sub_attr.map_field['floaty'],
+                             map_native.get('floaty'))
+            self.assertEqual(actual.map_field['mapy']['baz'],
+                             map_native.get('mapy').get('baz'))
+
+    @pytest.mark.asyncio
+    async def test_model_subclass_attributes_inherited_on_create(self):
+        scope_args = {'count': 0}
+
+        def fake_dynamodb(*args, **kwargs):
+            if scope_args['count'] == 0:
+                scope_args['count'] += 1
+                raise ClientError({'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}},
+                                  "DescribeTable")
+            return {}
+
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            await Dog.create_table(read_capacity_units=2, write_capacity_units=2)
+
+            actual = req.call_args_list[1][0][1]
+
+            self.assertEquals(actual['TableName'], DOG_TABLE_DATA['Table']['TableName'])
+            self.assert_dict_lists_equal(actual['KeySchema'], DOG_TABLE_DATA['Table']['KeySchema'])
+            self.assert_dict_lists_equal(actual['AttributeDefinitions'],
+                                         DOG_TABLE_DATA['Table']['AttributeDefinitions'])
+
+
+class ModelInitTestCase(TestCase):
+
+    @pytest.mark.asyncio
+    async def test_raw_map_attribute_with_dict_init(self):
+        attribute = {
+            'foo': 123,
+            'bar': 'baz'
+        }
+        actual = await ExplicitRawMapModel.initialize(map_id=3, map_attr=attribute)
+        self.assertEquals(actual.map_attr['foo'], attribute['foo'])
+
+    @pytest.mark.asyncio
+    async def test_raw_map_attribute_with_initialized_instance_init(self):
+        attribute = {
+            'foo': 123,
+            'bar': 'baz'
+        }
+        initialized_instance = MapAttribute(**attribute)
+        actual = await ExplicitRawMapModel.initialize(map_id=3, map_attr=initialized_instance)
+        self.assertEquals(actual.map_attr['foo'], initialized_instance['foo'])
+        self.assertEquals(actual.map_attr['foo'], attribute['foo'])
+
+    @pytest.mark.asyncio
+    async def test_subclassed_map_attribute_with_dict_init(self):
+        attribute = {
+            'make': 'Volkswagen',
+            'model': 'Super Beetle'
+        }
+        expected_model = CarInfoMap(**attribute)
+        actual = await CarModel.initialize(car_id=1, car_info=attribute)
+        self.assertEquals(expected_model.make, actual.car_info.make)
+        self.assertEquals(expected_model.model, actual.car_info.model)
+
+    @pytest.mark.asyncio
+    async def test_subclassed_map_attribute_with_initialized_instance_init(self):
+        attribute = {
+            'make': 'Volkswagen',
+            'model': 'Super Beetle'
+        }
+        expected_model = CarInfoMap(**attribute)
+        actual = await CarModel.initialize(car_id=1, car_info=expected_model)
+        self.assertEquals(expected_model.make, actual.car_info.make)
+        self.assertEquals(expected_model.model, actual.car_info.model)
+
+    def _get_bin_tree(self, multiplier=1):
+        return {
+            'value': 5 * multiplier,
+            'left': {
+                'value': 2 * multiplier,
+                'left': {
+                    'value': 1 * multiplier
+                },
+                'right': {
+                    'value': 3 * multiplier
+                }
+            },
+            'right': {
+                'value': 7 * multiplier,
+                'left': {
+                    'value': 6 * multiplier
+                },
+                'right': {
+                    'value': 8 * multiplier
+                }
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_subclassed_map_attribute_with_map_attributes_member_with_dict_init(self):
+        left = self._get_bin_tree()
+        right = self._get_bin_tree(multiplier=2)
+        actual = await TreeModel.initialize(tree_key='key', left=left, right=right)
+        self.assertEquals(actual.left.left.right.value, 3)
+        self.assertEquals(actual.left.left.value, 2)
+        self.assertEquals(actual.right.right.left.value, 12)
+        self.assertEquals(actual.right.right.value, 14)
+
+    @pytest.mark.asyncio
+    async def test_subclassed_map_attribute_with_map_attribute_member_with_initialized_instance_init(self):
+        left = self._get_bin_tree()
+        right = self._get_bin_tree(multiplier=2)
+        left_instance = TreeLeaf(**left)
+        right_instance = TreeLeaf(**right)
+        actual = await TreeModel.initialize(tree_key='key', left=left_instance, right=right_instance)
+        self.assertEquals(actual.left.left.right.value, left_instance.left.right.value)
+        self.assertEquals(actual.left.left.value, left_instance.left.value)
+        self.assertEquals(actual.right.right.left.value, right_instance.right.left.value)
+        self.assertEquals(actual.right.right.value, right_instance.right.value)

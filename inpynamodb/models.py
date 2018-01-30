@@ -198,7 +198,7 @@ class MetaModel(AttributeContainerMeta):
 @add_metaclass(MetaModel)
 class Model(AttributeContainer):
     """
-    Defines a `PynamoDB` Model
+    Defines a `InPynamoDB` Model
 
     This model is backed by a table in DynamoDB.
     You can create the table by with the ``create_table`` method.
@@ -882,19 +882,19 @@ class Model(AttributeContainer):
                         raise TableError("No TableStatus returned for table")
 
     @classmethod
-    def dumps(cls):
+    async def dumps(cls):
         """
         Returns a JSON representation of this model's table
         """
-        return json.dumps([item._get_json() for item in cls.scan()])
+        return json.dumps([item._get_json() async for item in cls.scan()])
 
     @classmethod
-    def dump(cls, filename):
+    async def dump(cls, filename):
         """
         Writes the contents of this model's table as JSON to the given filename
         """
         with open(filename, 'w') as out:
-            out.write(cls.dumps())
+            out.write(await cls.dumps())
 
     @classmethod
     async def loads(cls, data):
@@ -905,9 +905,9 @@ class Model(AttributeContainer):
                 await batch.save(item)
 
     @classmethod
-    def load(cls, filename):
+    async def load(cls, filename):
         with open(filename, 'r') as inf:
-            cls.loads(inf.read())
+            await cls.loads(inf.read())
 
     # Private API below
     @classmethod
@@ -929,7 +929,7 @@ class Model(AttributeContainer):
             attributes[range_keyname] = {
                 range_keytype: range_key
             }
-        item = cls()
+        item = await cls.initialize()
         item._deserialize(attributes)
         return item
 
