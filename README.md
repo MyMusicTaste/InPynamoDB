@@ -145,3 +145,29 @@ UserModel.dump("usermodel_backup.json")
 # Restore the table
 UserModel.load("usermodel_backup.json")
 ```
+
+# Additional Functions
+## UUIDAttribute
+Provide an UUIDAttribute which generates UUID automatically or manually.
+### Usage
+```python
+# custom_model.py
+from inpynamodb.models import Model
+from inpynamodb.attributes import UUIDAttribute
+class UserModel(Model):
+    class Meta:
+        table_name = "User"
+        host = DB_HOST
+        write_capacity_units = DB_WRITE_CAPACITY_UNIT
+        read_capacity_units = DB_READ_CAPACITY_UNIT
+    
+    id = UUIDAttribute(hash_key=True, uuid_version=1, auto=True)
+````
+
+There are two additional arguments, `uuid_version` and `auto`.
+- `hash_key`: Indicates that this attribute is hash key of model.
+- `range_key`: Indicates that this attribute is range key of model.
+- `null`: Indicate this attribute is nullable.
+- `default`: Default value of this attribute. If auto == True, this value will be ignored because UUID will be generated as default.
+- `uuid_version`: UUID version which this attribute will use. Only supports 1 and 4.
+- `auto`: Specify this attribute will generate UUID automatically, if False, this attribute will behave like other attributes.
