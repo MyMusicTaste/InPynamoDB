@@ -474,7 +474,8 @@ class Model(AttributeContainer):
     async def get(cls,
                   hash_key,
                   range_key=None,
-                  consistent_read=False):
+                  consistent_read=False,
+                  attributes_to_get=None):
         """
         Returns a single object using the provided keys
 
@@ -485,7 +486,8 @@ class Model(AttributeContainer):
         data = await cls._get_connection().get_item(
             hash_key,
             range_key=range_key,
-            consistent_read=consistent_read
+            consistent_read=consistent_read,
+            attributes_to_get=attributes_to_get
         )
         if data:
             item_data = data.get(ITEM)
