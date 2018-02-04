@@ -10,7 +10,6 @@ from base64 import b64decode
 
 import six
 import time
-from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
 
@@ -208,6 +207,7 @@ class AsyncConnection(object):
 
         if session_cls:
             self.session_cls = session_cls
+
         else:
             self.session_cls = get_settings_value('session_cls')
 
@@ -238,7 +238,7 @@ class AsyncConnection(object):
         Returns a valid aiobotocore session
         """
         if self._session is None:
-            self._session = get_session()
+            self._session = get_settings_value('session_cls')
         return self._session
 
     def _log_debug(self, operation, kwargs):
@@ -502,7 +502,8 @@ class AsyncConnection(object):
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
         # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
-        data = await self.client._make_api_call(operation_name, operation_kwargs)
+        async with self.client as client:
+            data = await client._make_api_call(operation_name, operation_kwargs)
 
         if data and CONSUMED_CAPACITY in data:
             capacity = data.get(CONSUMED_CAPACITY)
