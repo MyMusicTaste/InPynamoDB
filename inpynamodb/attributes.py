@@ -31,6 +31,7 @@ class Attribute(object):
     def __init__(self,
                  hash_key=False,
                  range_key=False,
+                 defaultable=True,
                  null=None,
                  default=None,
                  attr_name=None
@@ -41,6 +42,7 @@ class Attribute(object):
         self.is_hash_key = hash_key
         self.is_range_key = range_key
         self.attr_path = [attr_name]
+        self.defaultable = defaultable
 
     @property
     def attr_name(self):
@@ -253,6 +255,24 @@ class AttributeContainer(object):
             if value is not None:
                 setattr(self, name, value)
 
+    def set_defaults(self):
+        """
+        Sets and fields that provide a default value
+        """
+        for name, attr in self._get_attributes().items():
+            default = attr.default
+            defaultable = attr.defaultable
+
+            if not defaultable:
+                continue
+            elif callable(default):
+                value = default()
+                if isinstance(value, uuid.UUID):
+                    value = str(value)
+            else:
+                value = default
+            if value is not None:
+                setattr(self, name, value)
 
     def _set_attributes(self, **attributes):
         """
