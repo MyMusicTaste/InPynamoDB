@@ -6,7 +6,7 @@ from os import getenv
 import aiobotocore
 
 log = logging.getLogger(__name__)
-os.environ["PYNAMODB_CONFIG"] = os.path.dirname(os.path.abspath(__file__))
+os.environ["INPYNAMODB_CONFIG"] = os.path.dirname(os.path.abspath(__file__))
 
 default_settings_dict = {
     'request_timeout_seconds': 60,
@@ -17,14 +17,14 @@ default_settings_dict = {
     'allow_rate_limited_scan_without_consumed_capacity': False,
 }
 
-OVERRIDE_SETTINGS_PATH = getenv('PYNAMODB_CONFIG', '/etc/pynamodb/global_default_settings.py')
+OVERRIDE_SETTINGS_PATH = getenv('INPYNAMODB_CONFIG', '/etc/inpynamodb/global_default_settings.py')
 
 override_settings = {}
 if os.path.isfile(OVERRIDE_SETTINGS_PATH):
-    override_settings = imp.load_source('__pynamodb_override_settings__', OVERRIDE_SETTINGS_PATH)
-    log.info('Override settings for inpynamo available {0}'.format(OVERRIDE_SETTINGS_PATH))
+    override_settings = imp.load_source('__inpynamodb_override_settings__', OVERRIDE_SETTINGS_PATH)
+    log.info('Override settings for inpynamodb available {0}'.format(OVERRIDE_SETTINGS_PATH))
 else:
-    log.info('Override settings for inpynamo not available {0}'.format(OVERRIDE_SETTINGS_PATH))
+    log.info('Override settings for inpynamodb not available {0}'.format(OVERRIDE_SETTINGS_PATH))
     log.info('Using Default settings value')
 
 

@@ -147,27 +147,21 @@ UserModel.load("usermodel_backup.json")
 ```
 
 # Additional Functions
-## UUIDAttribute
-Provide an UUIDAttribute which generates UUID automatically or manually.
-### Usage
-```python
-# custom_model.py
-from inpynamodb.models import Model
-from inpynamodb.attributes import UUIDAttribute
-class UserModel(Model):
-    class Meta:
-        table_name = "User"
-        host = DB_HOST
-        write_capacity_units = DB_WRITE_CAPACITY_UNIT
-        read_capacity_units = DB_READ_CAPACITY_UNIT
-    
-    id = UUIDAttribute(hash_key=True, uuid_version=1, auto=True)
-````
+### Set eventloop
+- You can define which event loop will be used by overriding InPynamoDB configuration. If you need more information about how to overriding InPynamoDB configuration, check following [documentation of PynamoDB](http://pynamodb.readthedocs.io/en/latest/settings.html).
+- Set system-global variable INPYNAMODB_CONFIG as path of your custom setting.
+- The custom setting file will look like below:
+```pyhon
 
-There are two additional arguments, `uuid_version` and `auto`.
-- `hash_key`: Indicates that this attribute is hash key of model.
-- `range_key`: Indicates that this attribute is range key of model.
-- `null`: Indicate this attribute is nullable.
-- `default`: Default value of this attribute. If auto == True, this value will be ignored because UUID will be generated as default.
-- `uuid_version`: UUID version which this attribute will use. Only supports 1 and 4.
-- `auto`: Specify this attribute will generate UUID automatically, if False, this attribute will behave like other attributes.
+# Custom session
+import uvloop
+
+session_loop = uvloop.new_event_loop() 
+
+session_cls = aiobotocore.get_session(loop=session_loop)
+request_timeout_seconds = 60
+max_retry_attempts = 3
+base_backoff_ms = 25
+region = 'ap-northeast-2'
+allow_rate_limited_scan_without_consumed_capacity = False
+```
