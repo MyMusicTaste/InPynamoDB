@@ -11,10 +11,8 @@ class TableConnection(object):
         self._hash_keyname = None
         self._range_keyname = None
         self.table_name = table_name
-        self.connection = AsyncConnection(region=region, host=host, session_cls=session_cls,
-                                          request_timeout_seconds=request_timeout_seconds,
-                                          max_retry_attempts=max_retry_attempts,
-                                          base_backoff_ms=base_backoff_ms)
+        self.connection = AsyncConnection(region=region, host=host, request_timeout_seconds=request_timeout_seconds,
+                                          max_retry_attempts=max_retry_attempts, base_backoff_ms=base_backoff_ms)
 
     async def put_item(self, hash_key,
                        range_key=None,

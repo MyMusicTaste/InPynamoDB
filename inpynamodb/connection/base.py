@@ -10,6 +10,8 @@ from base64 import b64decode
 
 import six
 import time
+
+from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
 
@@ -193,23 +195,15 @@ class AsyncConnection(object):
     """
     A higher level abstraction over aiobotocore
     """
-    def __init__(self, region=None, host=None, session_cls=None, request_timeout_seconds=None, max_retry_attempts=None,
+    def __init__(self, region=None, host=None, request_timeout_seconds=None, max_retry_attempts=None,
                  base_backoff_ms=None):
         self._tables = {}
         self.host = host
-        self._client = None
         self._session = None
-        self._requests_session = None
         if region:
             self.region = region
         else:
             self.region = get_settings_value('region')
-
-        if session_cls:
-            self.session_cls = session_cls
-
-        else:
-            self.session_cls = get_settings_value('session_cls')
 
         if request_timeout_seconds is not None:
             self._request_timeout_seconds = request_timeout_seconds
@@ -227,10 +221,7 @@ class AsyncConnection(object):
             self._base_backoff_ms = get_settings_value('base_backoff_ms')
 
     def __repr__(self):
-        return six.u("Connection<{0}>".format(self.client.meta.endpoint_url))
-
-    def __del__(self):
-        self.close_session()
+        return six.u("InPynamoDB Connection")
 
     @property
     def session(self):
@@ -238,7 +229,7 @@ class AsyncConnection(object):
         Returns a valid aiobotocore session
         """
         if self._session is None:
-            self._session = get_settings_value('session_cls')
+            self._session = get_session()
         return self._session
 
     def _log_debug(self, operation, kwargs):
@@ -259,18 +250,6 @@ class AsyncConnection(object):
         """
         log.error("%s failed with status: %s, message: %s",
                   operation, response.status_code,response.content)
-
-    def close_session(self):
-        self.client.close()
-
-    @property
-    def requests_session(self):
-        """
-        Return a requests session to execute prepared requests using the same pool
-        """
-        if self._requests_session is None:
-            self._requests_session = self.session_cls()
-        return self._requests_session
 
     async def _get_filter_expression(self, table_name, filters, conditional_operator,
                                      name_placeholders, expression_attribute_values):
@@ -502,7 +481,7 @@ class AsyncConnection(object):
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
         # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
-        async with self.client as client:
+        async with self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host) as client:
             data = await client._make_api_call(operation_name, operation_kwargs)
 
         if data and CONSUMED_CAPACITY in data:
@@ -1244,20 +1223,6 @@ class AsyncConnection(object):
             return await self.dispatch(LIST_TABLES, operation_kwargs)
         except BOTOCORE_EXCEPTIONS as e:
             raise TableError("Unable to list tables: {0}".format(e), e)
-
-    @property
-    def client(self):
-        """
-        Returns a aiobotocore dynamodb client
-        """
-        # botocore has a known issue where it will cache empty credentials
-        # https://github.com/boto/botocore/blob/4d55c9b4142/botocore/credentials.py#L1016-L1021
-        # if the client does not have credentials, we create a new client
-        # otherwise the client is permanently poisoned in the case of metadata service flakiness when using IAM roles
-        # TODO session connection check
-        if not self._client or (self._client._request_signer and not self._client._request_signer._credentials):
-            self._client = self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host)
-        return self._client
 
     @staticmethod
     def _reverse_dict(d):
