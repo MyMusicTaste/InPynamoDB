@@ -283,6 +283,12 @@ class AttributeContainer(object):
                 raise ValueError("Attribute {0} specified does not exist".format(attr_name))
             setattr(self, attr_name, attr_value)
 
+    def as_dict(self):
+        result = {}
+        for key, value in six.iteritems(self.attribute_values):
+            result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+        return result
+
 
 class SetMixin(object):
     """
