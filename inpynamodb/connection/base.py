@@ -228,7 +228,7 @@ class AsyncConnection(object):
         """
         Returns a valid aiobotocore session
         """
-        if self._session is None:
+        if self._session is None or not self._session._loop.is_running():
             self._session = get_session()
         return self._session
 
