@@ -419,8 +419,8 @@ class UnicodeAttribute(Attribute):
 
 
 class UUIDAttribute(UnicodeAttribute):
-    def __init__(self, hash_key=False, range_key=False, null=None,
-                 default=None, uuid_version=1, attr_name=None, auto=False):
+    def __init__(self, hash_key=False, range_key=False, null=None, defaultable=True,
+                 default=None, uuid_version=1, attr_name=None):
         """
         :param hash_key: Indicates that this attribute is hash key of model.
         :param range_key: Indicates that this attribute is range key of model.
@@ -428,29 +428,14 @@ class UUIDAttribute(UnicodeAttribute):
         :param default: Default value of this attribute.
                         If auto == True, this value will be ignored because UUID will be generated as default.
         :param uuid_version: UUID version which this attribute will use. Only supports 1 and 4.
-        :param auto: Specify this attribute will generate UUID automatically,
-                     if False, this attribute will behave like other attributes.
         """
         self.uuid_version = uuid_version
-        self.uuid_methods_mapper = {
-            1: uuid.uuid1,
-            4: uuid.uuid4
-        }
 
-        if auto:
-            try:
-                super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
-                                                    null=null, default=None, attr_name=attr_name)
-                self.default = self.uuid_methods_mapper[uuid_version]
-
-            except KeyError:
-                raise ValueError("InPynamoDB only supports UUID version 1 and 4 for UUIDAttribute.")
-        else:
-            super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key,
-                                                null=null, default=default, attr_name=attr_name)
+        super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key, defaultable=defaultable,
+                                            null=null, default=default, attr_name=attr_name)
 
     def serialize(self, value):
-        if value:
+        if isinstance(value, uuid.UUID):
             value_str = str(value)
             try:
                 uuid.UUID(value_str, version=self.uuid_version)

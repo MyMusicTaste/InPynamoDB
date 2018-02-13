@@ -339,7 +339,7 @@ class Model(AttributeContainer):
         return await self._get_connection().delete_item(*args, **kwargs)
 
     async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None,
-                          **expected_values):
+                          return_consumed_capacity=None, **expected_values):
         """
         Updates an item using the UpdateItem operation.
 
@@ -379,6 +379,7 @@ class Model(AttributeContainer):
         kwargs[pythonic(RETURN_VALUES)] = ALL_NEW
         kwargs.update(conditional_operator=conditional_operator)
         kwargs.update(condition=condition)
+        kwargs.update(return_consumed_capacity=return_consumed_capacity)
         data = await self._get_connection().update_item(
             *args,
             **kwargs
@@ -443,7 +444,8 @@ class Model(AttributeContainer):
                 setattr(self, attr_name, attr.deserialize(value.get(ATTR_TYPE_MAP[attr.attr_type])))
         return data
 
-    async def save(self, condition=None, conditional_operator=None, **expected_values):
+    async def save(self, condition=None, return_values=None, return_consumed_capacity=None,
+                   conditional_operator=None, **expected_values):
         """
         Save this object to dynamodb
         """
@@ -451,6 +453,10 @@ class Model(AttributeContainer):
         args, kwargs = self._get_save_args()
         if len(expected_values):
             kwargs.update(expected=self._build_expected_values(expected_values, PUT_FILTER_OPERATOR_MAP))
+        if return_values:
+            kwargs.update(return_values=return_values)
+        if return_consumed_capacity:
+            kwargs.update(return_consumed_capacity=return_consumed_capacity)
         kwargs.update(conditional_operator=conditional_operator)
         kwargs.update(condition=condition)
 
