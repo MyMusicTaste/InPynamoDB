@@ -271,8 +271,7 @@ class AttributeContainer(object):
                     value = str(value)
             else:
                 value = default
-            if value is not None:
-                setattr(self, name, value)
+            setattr(self, name, value)
 
     def _set_attributes(self, **attributes):
         """
