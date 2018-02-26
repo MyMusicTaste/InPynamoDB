@@ -442,7 +442,7 @@ class Model(AttributeContainer):
             attr = self._get_attributes().get(attr_name)
             if attr:
                 setattr(self, attr_name, attr.deserialize(value.get(ATTR_TYPE_MAP[attr.attr_type])))
-        return data
+        return await self.from_raw_data(data[ATTRIBUTES])
 
     async def save(self, condition=None, return_values=None, return_consumed_capacity=None,
                    conditional_operator=None, **expected_values):
