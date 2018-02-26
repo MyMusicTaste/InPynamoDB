@@ -165,3 +165,50 @@ base_backoff_ms = 25
 region = 'ap-northeast-2'
 allow_rate_limited_scan_without_consumed_capacity = False
 ```
+
+### Model.update (from 0.0.6)
+- Model.update() returns InPynamoDB model, not response metadata.
+```python
+updated_model = await model.update(actions=[
+    id_attribute.set(1847931231),
+    username_attribute.set("ThisIsUsernameOfUser."),
+    is_active_attribute.set(True)
+])
+
+print(updated_model)
+"""
+updated_model = {
+    'Attributes': {
+        "id": {
+            "N": 1847931231
+        },
+        "username": {
+            "S": "ThisIsUsernameOfUser."
+        },
+        "is_active": {
+            "B": True
+        }
+    },
+    'ResponseMetadata': {
+        # Response Metadata (header, status code...)
+    }
+}
+"""
+```
+- was changed as below:
+```python
+updated_model = await model.update(actions=[
+    id_attribute.set(1847931231),
+    username_attribute.set("ThisIsUsernameOfUser."),
+    is_active_attribute.set(True)
+])
+
+print(updated_model)
+"""
+updated_model = {
+    'id': 1847931231,
+    'username': "ThisIsUsernameOfUser.",
+    'is_active': True
+}
+"""
+```
