@@ -282,10 +282,17 @@ class AttributeContainer(object):
                 raise ValueError("Attribute {0} specified does not exist".format(attr_name))
             setattr(self, attr_name, attr_value)
 
-    def as_dict(self):
+    def as_dict(self, attributes_to_get=None):
         result = {}
-        for key, value in six.iteritems(self.attribute_values):
-            result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+
+        if attributes_to_get is None:
+            for key, value in six.iteritems(self.attribute_values):
+                result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+        else:
+            for key, value in six.iteritems(self.attribute_values):
+                if key in attributes_to_get:
+                    result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+
         return result
 
 
@@ -838,10 +845,17 @@ class MapAttribute(Attribute, AttributeContainer, metaclass=MapAttributeMeta):
     def is_raw(cls):
         return cls == MapAttribute
 
-    def as_dict(self):
+    def as_dict(self, attributes_to_get=None):
         result = {}
-        for key, value in six.iteritems(self.attribute_values):
-            result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+
+        if attributes_to_get is None:
+            for key, value in six.iteritems(self.attribute_values):
+                result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+        else:
+            for key, value in six.iteritems(self.attribute_values):
+                if key in attributes_to_get:
+                    result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+
         return result
 
     @classmethod
