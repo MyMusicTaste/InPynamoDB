@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
 
 install_requires = [
-    'PynamoDB>=3.2.1',
-    'aiobotocore==0.5.3'
+    'PynamoDB==3.2.1',
+    'aiobotocore==0.6.0',
+    'aiohttp==3.0.0'
 ]
 
 python_requires = '>=3.6'
