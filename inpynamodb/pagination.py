@@ -1,4 +1,4 @@
-from inpynamodb.constants import CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY
+from pynamodb.constants import CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY
 
 
 class ResultIterator(object):

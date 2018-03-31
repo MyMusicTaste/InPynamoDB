@@ -31,7 +31,7 @@ else:
 def get_settings_value(key):
     """
     Fetches the value from the override file.
-    If the value is not present, then tries to fetch the values from constants.py
+    If the value is not present, then tries to fetch the values from
     """
     if hasattr(override_settings, key):
         return getattr(override_settings, key)

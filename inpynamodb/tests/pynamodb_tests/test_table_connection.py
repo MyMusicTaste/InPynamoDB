@@ -2,8 +2,8 @@ import pytest
 from asynctest import TestCase, patch, fail_on, CoroutineMock
 
 from inpynamodb.connection import TableConnection
-from inpynamodb.constants import DEFAULT_REGION
-from inpynamodb.expressions.operand import Path
+from pynamodb.constants import DEFAULT_REGION
+from pynamodb.expressions.operand import Path
 from inpynamodb.tests.pynamodb_tests.data import DESCRIBE_TABLE_DATA, GET_ITEM_DATA
 from inpynamodb.tests.pynamodb_tests.response import HttpOK
 

@@ -1,19 +1,17 @@
 """
 Tests for the base connection class
 """
-import json
 
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
-from botocore.vendored import requests
 from pynamodb.exceptions import TableError, TableDoesNotExist, DeleteError, GetError, UpdateError, PutError, QueryError, \
     ScanError
-from inpynamodb.expressions.operand import Path
+from pynamodb.expressions.operand import Path
 
 from inpynamodb.connection import AsyncConnection as Connection
-from asynctest import TestCase, patch, mock, fail_on, asynctest, sentinel, CoroutineMock
+from asynctest import TestCase, patch, mock, fail_on
 
-from inpynamodb.constants import DEFAULT_REGION
+from pynamodb.constants import DEFAULT_REGION
 from inpynamodb.tests.pynamodb_tests.data import DESCRIBE_TABLE_DATA, LIST_TABLE_DATA, GET_ITEM_DATA
 
 PATCH_METHOD = 'aiobotocore.client.AioBaseClient._make_api_call'
@@ -39,7 +37,7 @@ class ConnectionTestCase(TestCase):
         conn = Connection(host='http://foohost')
         self.assertIsNotNone(conn.client)
         self.assertIsNotNone(conn)
-        self.assertEqual(repr(conn), "Connection<{0}>".format(conn.host))
+        self.assertEqual(repr(conn), "InPynamoDB Connection<{0}>".format(conn.host))
 
     @fail_on(unused_loop=False)
     def test_subsequent_client_is_not_cached_when_credentials_none(self):

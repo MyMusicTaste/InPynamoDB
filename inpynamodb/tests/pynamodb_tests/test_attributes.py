@@ -11,7 +11,7 @@ from dateutil.tz import tzutc
 from asynctest.mock import patch, Mock, call
 import pytest
 
-from inpynamodb.constants import UTC, DATETIME_FORMAT
+from pynamodb.constants import UTC, DATETIME_FORMAT
 from inpynamodb.models import Model
 
 from inpynamodb.attributes import (

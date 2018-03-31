@@ -1,9 +1,8 @@
 """
 PynamoDB Indexes
 """
-import inspect
 
-from inpynamodb.constants import (
+from pynamodb.constants import (
     INCLUDE, ALL, KEYS_ONLY, ATTR_NAME, ATTR_TYPE, KEY_TYPE, ATTR_TYPE_MAP, KEY_SCHEMA,
     ATTR_DEFINITIONS, META_CLASS_NAME
 )

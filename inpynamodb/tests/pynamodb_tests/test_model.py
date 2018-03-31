@@ -19,7 +19,7 @@ from inpynamodb.attributes import MapAttribute, UnicodeAttribute, UTCDateTimeAtt
     BinarySetAttribute, BooleanAttribute, NumberAttribute, BinaryAttribute, ListAttribute
 from inpynamodb.indexes import AllProjection, IncludeProjection, KeysOnlyProjection, Index
 
-from inpynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, RESPONSES, \
+from pynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, RESPONSES, \
     BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS, ALL, KEYS_ONLY, INCLUDE, MAP_SHORT, LIST_SHORT, NUMBER_SHORT
 from inpynamodb.indexes import LocalSecondaryIndex, GlobalSecondaryIndex
 from inpynamodb.models import Model, ResultSet

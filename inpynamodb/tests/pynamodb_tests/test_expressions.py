@@ -1,10 +1,10 @@
 from asynctest import TestCase, fail_on
 
 from inpynamodb.attributes import ListAttribute, MapAttribute, NumberSetAttribute, UnicodeAttribute, UnicodeSetAttribute
-from inpynamodb.expressions.condition import size
-from inpynamodb.expressions.operand import Path, Value
-from inpynamodb.expressions.projection import create_projection_expression
-from inpynamodb.expressions.update import Action, Update
+from pynamodb.expressions.condition import size
+from pynamodb.expressions.operand import Path, Value
+from pynamodb.expressions.projection import create_projection_expression
+from pynamodb.expressions.update import Action, Update
 
 
 class PathTestCase(TestCase):

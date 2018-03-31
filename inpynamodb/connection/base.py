@@ -8,7 +8,6 @@ import math
 import warnings
 from base64 import b64decode
 
-import six
 import time
 
 from aiobotocore import get_session
@@ -16,7 +15,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
 
 from pynamodb.connection.util import pythonic
-from inpynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESSION, EXPRESSION_ATTRIBUTE_NAMES, \
+from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESSION, EXPRESSION_ATTRIBUTE_NAMES, \
     EXPRESSION_ATTRIBUTE_VALUES, PUT_ITEM, AND, DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE_TABLE, CREATE_TABLE, \
     RETURN_CONSUMED_CAPACITY, TOTAL, CONSUMED_CAPACITY, CAPACITY_UNITS, PROVISIONED_THROUGHPUT, READ_CAPACITY_UNITS, \
     WRITE_CAPACITY_UNITS, ATTR_NAME, ATTR_TYPE, ATTR_DEFINITIONS, INDEX_NAME, KEY_SCHEMA, PROJECTION, KEY_TYPE, \
@@ -34,10 +33,10 @@ from inpynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRE
 from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, \
     ScanError, GetError
 
-from inpynamodb.expressions.condition import Condition
-from inpynamodb.expressions.operand import Path
-from inpynamodb.expressions.projection import create_projection_expression
-from inpynamodb.expressions.update import Update
+from pynamodb.expressions.condition import Condition
+from pynamodb.expressions.operand import Path
+from pynamodb.expressions.projection import create_projection_expression
+from pynamodb.expressions.update import Update
 from pynamodb.types import RANGE, HASH
 
 from inpynamodb.settings import get_settings_value
@@ -60,7 +59,7 @@ class MetaTable(object):
 
     def __repr__(self):
         if self.data:
-            return six.u("MetaTable<{0}>".format(self.data.get(TABLE_NAME)))
+            return "MetaTable<{0}>".format(self.data.get(TABLE_NAME))
 
     @property
     def range_keyname(self):
@@ -199,7 +198,9 @@ class AsyncConnection(object):
                  base_backoff_ms=None):
         self._tables = {}
         self.host = host
+        self._client = None
         self._session = None
+
         if region:
             self.region = region
         else:
@@ -221,7 +222,16 @@ class AsyncConnection(object):
             self._base_backoff_ms = get_settings_value('base_backoff_ms')
 
     def __repr__(self):
-        return six.u("InPynamoDB Connection")
+        return f"InPynamoDB Connection<{self.client._endpoint.host}>"
+
+    @property
+    def client(self):
+        """
+        Returns a aiobotocore dynamodb client
+        """
+        if not self._client or (self._client._request_signer and not self._client._request_signer._credentials):
+            self._client = self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host)
+        return self._client
 
     @property
     def session(self):
@@ -480,9 +490,9 @@ class AsyncConnection(object):
 
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
-        # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
-        async with self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host) as client:
-            data = await client._make_api_call(operation_name, operation_kwargs)
+        # self.send_post_boto_callback(operation_name, req_uuid, table_name)
+
+        data = await self.client._make_api_call(operation_name, operation_kwargs)
 
         if data and CONSUMED_CAPACITY in data:
             capacity = data.get(CONSUMED_CAPACITY)
@@ -1226,7 +1236,7 @@ class AsyncConnection(object):
 
     @staticmethod
     def _reverse_dict(d):
-        return dict((v, k) for k, v in six.iteritems(d))
+        return dict((v, k) for k, v in d.items())
 
 
 def _convert_binary(attr):
