@@ -5,11 +5,10 @@ import asyncio
 import logging
 
 import math
-import warnings
-from base64 import b64decode
 
 import time
 
+from pynamodb.connection.base import MetaTable as _MetaTable, Connection as _Connection
 from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
@@ -26,18 +25,13 @@ from pynamodb.constants import SERVICE_NAME, TABLE_NAME, ITEM, CONDITION_EXPRESS
     UPDATE_ITEM, DELETE_ITEM, SEGMENT, TOTAL_SEGMENTS, SCAN, DELETE_REQUEST, REQUEST_ITEMS, BATCH_WRITE_ITEM, \
     PUT_REQUEST, KEYS, BATCH_GET_ITEM, EXCLUSIVE_START_TABLE_NAME, UPDATE, GLOBAL_SECONDARY_INDEX_UPDATES, EXISTS, \
     NOT_NULL, NULL, EQ, QUERY_FILTER_VALUES, NOT_CONTAINS, FILTER_EXPRESSION_OPERATOR_MAP, CONDITIONAL_OPERATOR, \
-    GET_ITEM, SHORT_ATTR_TYPES, EXCLUSIVE_START_KEY, ITEMS, LAST_EVALUATED_KEY, CONDITIONAL_OPERATORS, EXPECTED, \
-    QUERY_FILTER, RETURN_CONSUMED_CAPACITY_VALUES, RETURN_ITEM_COLL_METRICS, RETURN_VALUES_VALUES, RETURN_VALUES, \
-    RETURN_ITEM_COLL_METRICS_VALUES, BINARY_SHORT, DEFAULT_ENCODING, BINARY_SET_SHORT, RESPONSES, UNPROCESSED_KEYS, \
-    UNPROCESSED_ITEMS
+    GET_ITEM, ITEMS, LAST_EVALUATED_KEY, CONDITIONAL_OPERATORS
 from pynamodb.exceptions import PutError, TableError, TableDoesNotExist, QueryError, UpdateError, DeleteError, \
     ScanError, GetError
 
-from pynamodb.expressions.condition import Condition
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
-from pynamodb.types import RANGE, HASH
 
 from inpynamodb.settings import get_settings_value
 
@@ -47,150 +41,16 @@ log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
 
 
-class MetaTable(object):
+class MetaTable(_MetaTable):
     """
     A pythonic wrapper around table metadata
     """
-
-    def __init__(self, data):
-        self.data = data or {}
-        self._range_keyname = None
-        self._hash_keyname = None
-
     def __repr__(self):
         if self.data:
             return "MetaTable<{0}>".format(self.data.get(TABLE_NAME))
 
-    @property
-    def range_keyname(self):
-        """
-        Returns the name of this table's range key
-        """
-        if self._range_keyname is None:
-            for attr in self.data.get(KEY_SCHEMA):
-                if attr.get(KEY_TYPE) == RANGE:
-                    self._range_keyname = attr.get(ATTR_NAME)
-        return self._range_keyname
 
-    @property
-    def hash_keyname(self):
-        """
-        Returns the name of this table's hash key
-        """
-        if self._hash_keyname is None:
-            for attr in self.data.get(KEY_SCHEMA):
-                if attr.get(KEY_TYPE) == HASH:
-                    self._hash_keyname = attr.get(ATTR_NAME)
-                    break
-        return self._hash_keyname
-
-    def get_index_hash_keyname(self, index_name):
-        """
-        Returns the name of the hash key for a given index
-        """
-        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
-        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
-        indexes = []
-        if local_indexes:
-            indexes += local_indexes
-        if global_indexes:
-            indexes += global_indexes
-        for index in indexes:
-            if index.get(INDEX_NAME) == index_name:
-                for schema_key in index.get(KEY_SCHEMA):
-                    if schema_key.get(KEY_TYPE) == HASH:
-                        return schema_key.get(ATTR_NAME)
-
-    def get_index_range_keyname(self, index_name):
-        """
-        Returns the name of the hash key for a given index
-        """
-        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
-        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
-        indexes = []
-        if local_indexes:
-            indexes += local_indexes
-        if global_indexes:
-            indexes += global_indexes
-        for index in indexes:
-            if index.get(INDEX_NAME) == index_name:
-                for schema_key in index.get(KEY_SCHEMA):
-                    if schema_key.get(KEY_TYPE) == RANGE:
-                        return schema_key.get(ATTR_NAME)
-        return None
-
-    def get_item_attribute_map(self, attributes, item_key=ITEM, pythonic_key=True):
-        """
-        Builds up a dynamodb compatible AttributeValue map
-        """
-        if pythonic_key:
-            item_key = item_key
-        attr_map = {
-            item_key: {}
-        }
-        for key, value in attributes.items():
-            # In this case, the user provided a mapping
-            # {'key': {'S': 'value'}}
-            if isinstance(value, dict):
-                attr_map[item_key][key] = value
-            else:
-                attr_map[item_key][key] = {
-                    self.get_attribute_type(key): value
-                }
-        return attr_map
-
-    def get_attribute_type(self, attribute_name, value=None):
-        """
-        Returns the proper attribute type for a given attribute name
-        """
-        for attr in self.data.get(ATTR_DEFINITIONS):
-            if attr.get(ATTR_NAME) == attribute_name:
-                return attr.get(ATTR_TYPE)
-        if value is not None and isinstance(value, dict):
-            for key in SHORT_ATTR_TYPES:
-                if key in value:
-                    return key
-        attr_names = [attr.get(ATTR_NAME) for attr in self.data.get(ATTR_DEFINITIONS)]
-        raise ValueError("No attribute {0} in {1}".format(attribute_name, attr_names))
-
-    def get_identifier_map(self, hash_key, range_key=None, key=KEY):
-        """
-        Builds the identifier map that is common to several operations
-        """
-        kwargs = {
-            key: {
-                self.hash_keyname: {
-                    self.get_attribute_type(self.hash_keyname): hash_key
-                }
-            }
-        }
-        if range_key is not None:
-            kwargs[key][self.range_keyname] = {
-                self.get_attribute_type(self.range_keyname): range_key
-            }
-        return kwargs
-
-    def get_exclusive_start_key_map(self, exclusive_start_key):
-        """
-        Builds the exclusive start key attribute map
-        """
-        if isinstance(exclusive_start_key, dict) and self.hash_keyname in exclusive_start_key:
-            # This is useful when paginating results, as the LastEvaluatedKey returned is already
-            # structured properly
-            return {
-                EXCLUSIVE_START_KEY: exclusive_start_key
-            }
-        else:
-            return {
-                EXCLUSIVE_START_KEY: {
-                    self.hash_keyname: {
-                        self.get_attribute_type(self.hash_keyname): exclusive_start_key
-                    }
-                }
-            }
-
-
-class AsyncConnection(object):
+class AsyncConnection(_Connection):
     """
     A higher level abstraction over aiobotocore
     """
@@ -241,25 +101,6 @@ class AsyncConnection(object):
         if self._session is None or not self._session._loop.is_running():
             self._session = get_session()
         return self._session
-
-    def _log_debug(self, operation, kwargs):
-        """
-        Sends a debug message to the logger
-        """
-        log.debug("Calling %s with arguments %s", operation, kwargs)
-
-    def _log_debug_response(self, operation, response):
-        """
-        Sends a debug message to the logger about a response
-        """
-        log.debug("%s response: %s", operation, response)
-
-    def _log_error(self, operation, response):
-        """
-        Sends an error message to the logger
-        """
-        log.error("%s failed with status: %s, message: %s",
-                  operation, response.status_code,response.content)
 
     async def _get_filter_expression(self, table_name, filters, conditional_operator,
                                      name_placeholders, expression_attribute_values):
@@ -416,24 +257,6 @@ class AsyncConnection(object):
         except BOTOCORE_EXCEPTIONS as e:
             raise QueryError("Failed to query items: {0}".format(e), e)
 
-    def parse_attribute(self, attribute, return_type=False):
-        """
-        Returns the attribute value, where the attribute can be
-        a raw attribute value, or a dictionary containing the type:
-        {'S': 'String value'}
-        """
-        if isinstance(attribute, dict):
-            for key in SHORT_ATTR_TYPES:
-                if key in attribute:
-                    if return_type:
-                        return key, attribute.get(key)
-                    return attribute.get(key)
-            raise ValueError("Invalid attribute supplied: {0}".format(attribute))
-        else:
-            if return_type:
-                return None, attribute
-            return attribute
-
     async def _get_condition_expression(self, table_name, expected, conditional_operator,
                                         name_placeholders, expression_attribute_values):
         """
@@ -539,16 +362,6 @@ class AsyncConnection(object):
             return await self.dispatch(BATCH_WRITE_ITEM, operation_kwargs)
         except BOTOCORE_EXCEPTIONS as e:
             raise PutError("Failed to batch write items: {0}".format(e), e)
-
-    def get_item_collection_map(self, return_item_collection_metrics):
-        """
-        Builds the item collection map
-        """
-        if return_item_collection_metrics.upper() not in RETURN_ITEM_COLL_METRICS_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_ITEM_COLL_METRICS_VALUES))
-        return {
-            RETURN_ITEM_COLL_METRICS: str(return_item_collection_metrics).upper()
-        }
 
     async def rate_limited_scan(self,
                                 table_name,
@@ -869,16 +682,6 @@ class AsyncConnection(object):
             item_key=item_key,
             pythonic_key=pythonic_key)
 
-    def get_consumed_capacity_map(self, return_consumed_capacity):
-        """
-        Builds the consumed capacity map that is common to several operations
-        """
-        if return_consumed_capacity.upper() not in RETURN_CONSUMED_CAPACITY_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_CONSUMED_CAPACITY_VALUES))
-        return {
-            RETURN_CONSUMED_CAPACITY: str(return_consumed_capacity).upper()
-        }
-
     async def batch_get_item(self,
                              table_name,
                              keys,
@@ -1116,34 +919,6 @@ class AsyncConnection(object):
         except BOTOCORE_EXCEPTIONS as e:
             raise TableError("Failed to update table: {0}".format(e), e)
 
-    def _check_condition(self, name, condition, expected_or_filter, conditional_operator):
-        if condition is not None:
-            if not isinstance(condition, Condition):
-                raise ValueError("'{0}' must be an instance of Condition".format(name))
-            if expected_or_filter or conditional_operator is not None:
-                raise ValueError("Legacy conditional parameters cannot be used with condition expressions")
-        else:
-            if expected_or_filter or conditional_operator is not None:
-                warnings.warn("Legacy conditional parameters are deprecated in favor of condition expressions")
-
-    def _check_actions(self, actions, attribute_updates):
-        if actions is not None:
-            if attribute_updates is not None:
-                raise ValueError("Legacy attribute updates cannot be used with update actions")
-        else:
-            if attribute_updates is not None:
-                warnings.warn("Legacy attribute updates are deprecated in favor of update actions")
-
-    def get_return_values_map(self, return_values):
-        """
-        Builds the return values map that is common to several operations
-        """
-        if return_values.upper() not in RETURN_VALUES_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_VALUES, RETURN_VALUES_VALUES))
-        return {
-            RETURN_VALUES: str(return_values).upper()
-        }
-
     async def create_table(self,
                            table_name,
                            attribute_definitions=None,
@@ -1238,11 +1013,3 @@ class AsyncConnection(object):
     def _reverse_dict(d):
         return dict((v, k) for k, v in d.items())
 
-
-def _convert_binary(attr):
-    if BINARY_SHORT in attr:
-        attr[BINARY_SHORT] = b64decode(attr[BINARY_SHORT].encode(DEFAULT_ENCODING))
-    elif BINARY_SET_SHORT in attr:
-        value = attr[BINARY_SET_SHORT]
-        if value and len(value):
-            attr[BINARY_SET_SHORT] = set(b64decode(v.encode(DEFAULT_ENCODING)) for v in value)
