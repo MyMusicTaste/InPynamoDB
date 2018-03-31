@@ -25,6 +25,7 @@ setup(
     license='MIT',
     keywords='python dynamodb amazon async',
     install_requires=install_requires,
+    test_requires=['pytest', 'pytest-asyncio', 'pytest-cov', 'pytest-mock', 'python-dateutil'],
     classifiers=[
         'Development Status :: 1 - Developing',
         'Intended Audience :: Developers',

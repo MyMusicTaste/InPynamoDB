@@ -122,7 +122,7 @@ Want to enable streams on a table? Just add a stream_view_type name attribute an
 ```python
 from inpynamodb.models import Model
 from inpynamodb.attributes import UnicodeAttribute
-from inpynamodb.constants import STREAM_NEW_AND_OLD_IMAGE
+from pynamodb.constants import STREAM_NEW_AND_OLD_IMAGE
 
 class AnimalModel(Model):
     """
