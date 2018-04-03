@@ -10,18 +10,19 @@ from datetime import datetime
 import pytest as pytest
 import six
 from aiobotocore import AioSession
-from asynctest import patch, TestCase, CoroutineMock, fail_on, MagicMock
+from asynctest import patch, TestCase, CoroutineMock, fail_on
 from botocore.exceptions import ClientError
 from pynamodb.connection.util import pythonic
 from pynamodb.types import RANGE
 
-from inpynamodb.attributes import MapAttribute, UnicodeAttribute, UTCDateTimeAttribute, NumberSetAttribute, UnicodeSetAttribute, \
+from pynamodb.attributes import MapAttribute, UnicodeAttribute, UTCDateTimeAttribute, NumberSetAttribute, UnicodeSetAttribute, \
     BinarySetAttribute, BooleanAttribute, NumberAttribute, BinaryAttribute, ListAttribute
-from inpynamodb.indexes import AllProjection, IncludeProjection, KeysOnlyProjection, Index
+from inpynamodb.indexes import Index, GlobalSecondaryIndex, LocalSecondaryIndex
+from pynamodb.indexes import AllProjection, IncludeProjection, KeysOnlyProjection
 
 from pynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, RESPONSES, \
     BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS, ALL, KEYS_ONLY, INCLUDE, MAP_SHORT, LIST_SHORT, NUMBER_SHORT
-from inpynamodb.indexes import LocalSecondaryIndex, GlobalSecondaryIndex
+
 from inpynamodb.models import Model, ResultSet
 from inpynamodb.tests.pynamodb_tests.data import MODEL_TABLE_DATA, SIMPLE_MODEL_TABLE_DATA, \
     CUSTOM_ATTR_NAME_INDEX_TABLE_DATA, GET_MODEL_ITEM_DATA, COMPLEX_TABLE_DATA, COMPLEX_ITEM_DATA, CAR_MODEL_TABLE_DATA, \

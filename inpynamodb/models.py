@@ -7,7 +7,8 @@ import warnings
 import six
 
 from six import add_metaclass
-from inpynamodb.attributes import AttributeContainerMeta, AttributeContainer, Attribute, MapAttribute, ListAttribute
+from inpynamodb.attributes import AttributeContainerMeta, AttributeContainer, Attribute, MapAttribute
+from pynamodb.attributes import ListAttribute
 from inpynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.exceptions import TableDoesNotExist, DoesNotExist, TableError
@@ -1275,7 +1276,6 @@ class Model(AttributeContainer):
             cls._connection = TableConnection(cls.Meta.table_name,
                                               region=cls.Meta.region,
                                               host=cls.Meta.host,
-                                              session_cls=cls.Meta.session_cls,
                                               request_timeout_seconds=cls.Meta.request_timeout_seconds,
                                               max_retry_attempts=cls.Meta.max_retry_attempts,
                                               base_backoff_ms=cls.Meta.base_backoff_ms)

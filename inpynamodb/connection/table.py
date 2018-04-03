@@ -6,7 +6,7 @@ class TableConnection(object):
     A higher level abstraction over aiobotocore
     """
 
-    def __init__(self, table_name, region=None, host=None, session_cls=None, request_timeout_seconds=None,
+    def __init__(self, table_name, region=None, host=None, request_timeout_seconds=None,
                  max_retry_attempts=None, base_backoff_ms=None):
         self._hash_keyname = None
         self._range_keyname = None
