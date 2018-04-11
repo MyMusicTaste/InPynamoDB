@@ -196,10 +196,13 @@ class AsyncConnection(object):
     A higher level abstraction over aiobotocore
     """
     def __init__(self, region=None, host=None, request_timeout_seconds=None, max_retry_attempts=None,
-                 base_backoff_ms=None):
+                 base_backoff_ms=None, aws_access_key_id=None, aws_secret_access_key=None):
         self._tables = {}
         self.host = host
         self._session = None
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
+
         if region:
             self.region = region
         else:
@@ -481,7 +484,9 @@ class AsyncConnection(object):
         # TODO signals will be implemented.
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
         # self.send_post_boto_callback(operation_name, req_uuid, table_name)\
-        async with self.session.create_client(SERVICE_NAME, self.region, endpoint_url=self.host) as client:
+        async with self.session.create_client(SERVICE_NAME, region_name=self.region,
+                                              endpoint_url=self.host, aws_access_key_id=self.aws_access_key_id,
+                                              aws_secret_access_key=self.aws_secret_access_key) as client:
             data = await client._make_api_call(operation_name, operation_kwargs)
 
         if data and CONSUMED_CAPACITY in data:
