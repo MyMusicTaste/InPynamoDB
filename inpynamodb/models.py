@@ -256,7 +256,6 @@ class Model(AttributeContainer):
 
         return cls(**attributes)
 
-
     @classmethod
     def has_map_or_list_attributes(cls):
         for attr_value in cls._get_attributes().values():
@@ -680,15 +679,13 @@ class Model(AttributeContainer):
             conditional_operator=conditional_operator
         )
 
-        iterator = ResultIterator(
+        return ResultIterator(
             cls._get_connection().query,
             query_args,
             query_kwargs,
             map_fn=cls.from_raw_data,
             limit=limit
         )
-
-        return iterator
 
     @classmethod
     async def rate_limited_scan(cls,
@@ -706,6 +703,7 @@ class Model(AttributeContainer):
                                 max_sleep_between_retry=10,
                                 max_consecutive_exceptions=30,
                                 consistent_read=None,
+                                index_name=None,
                                 **filters):
         """
         Scans the items in the table at a definite rate.
@@ -758,22 +756,24 @@ class Model(AttributeContainer):
             max_sleep_between_retry=max_sleep_between_retry,
             max_consecutive_exceptions=max_consecutive_exceptions,
             consistent_read=consistent_read,
+            index_name=index_name
         )
 
         async for item in scan_result:
             yield await cls.from_raw_data(item)
 
     @classmethod
-    def scan(cls,
-             filter_condition=None,
-             segment=None,
-             total_segments=None,
-             limit=None,
-             conditional_operator=None,
-             last_evaluated_key=None,
-             page_size=None,
-             consistent_read=None,
-             **filters):
+    async def scan(cls,
+                   filter_condition=None,
+                   segment=None,
+                   total_segments=None,
+                   limit=None,
+                   conditional_operator=None,
+                   last_evaluated_key=None,
+                   page_size=None,
+                   consistent_read=None,
+                   index_name=None,
+                   **filters):
         """
         Iterates through all items in the table
 
@@ -808,7 +808,8 @@ class Model(AttributeContainer):
             scan_filter=key_filter,
             total_segments=total_segments,
             conditional_operator=conditional_operator,
-            consistent_read=consistent_read
+            consistent_read=consistent_read,
+            index_name=index_name
         )
 
         return ResultIterator(
@@ -898,7 +899,7 @@ class Model(AttributeContainer):
         """
         Returns a JSON representation of this model's table
         """
-        return json.dumps([item._get_json() async for item in cls.scan()])
+        return json.dumps([item._get_json() async for item in await cls.scan()])
 
     @classmethod
     async def dump(cls, filename):

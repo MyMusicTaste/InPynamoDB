@@ -21,6 +21,7 @@ class IndexMeta(type):
     This class is here to allow for an index `Meta` class
     that contains the index settings
     """
+
     def __init__(cls, name, bases, attrs):
         if isinstance(attrs, dict):
             for attr_name, attr_obj in attrs.items():
@@ -28,7 +29,7 @@ class IndexMeta(type):
                     meta_cls = attrs.get(META_CLASS_NAME)
                     if meta_cls is not None:
                         meta_cls.attributes = None
-                elif issubclass(attr_obj.__class__, (Attribute, )):
+                elif issubclass(attr_obj.__class__, (Attribute,)):
                     if attr_obj.attr_name is None:
                         attr_obj.attr_name = attr_name
 
@@ -89,6 +90,33 @@ class Index(with_metaclass(IndexMeta)):
             limit=limit,
             last_evaluated_key=last_evaluated_key,
             attributes_to_get=attributes_to_get,
+            **filters
+        )
+
+    @classmethod
+    async def scan(cls,
+                   filter_condition=None,
+                   segment=None,
+                   total_segments=None,
+                   limit=None,
+                   conditional_operator=None,
+                   last_evaluated_key=None,
+                   page_size=None,
+                   consistent_read=None,
+                   **filters):
+        """
+        Scans an index
+        """
+        return await cls.Meta.model.scan(
+            filter_condition=filter_condition,
+            segment=segment,
+            total_segments=total_segments,
+            limit=limit,
+            conditional_operator=conditional_operator,
+            last_evaluated_key=last_evaluated_key,
+            page_size=page_size,
+            consistent_read=consistent_read,
+            index_name=cls.Meta.index_name,
             **filters
         )
 

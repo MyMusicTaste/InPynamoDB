@@ -77,11 +77,12 @@ class TableConnection(object):
                                 allow_rate_limited_scan_without_consumed_capacity=None,
                                 max_sleep_between_retry=None,
                                 max_consecutive_exceptions=None,
-                                consistent_read=None):
+                                consistent_read=None,
+                                index_name=None):
         """
         Performs the scan operation with rate limited
         """
-        return self.connection.rate_limited_scan(
+        return await self.connection.rate_limited_scan(
             self.table_name,
             filter_condition=filter_condition,
             attributes_to_get=attributes_to_get,
@@ -97,7 +98,8 @@ class TableConnection(object):
             allow_rate_limited_scan_without_consumed_capacity=allow_rate_limited_scan_without_consumed_capacity,
             max_sleep_between_retry=max_sleep_between_retry,
             max_consecutive_exceptions=max_consecutive_exceptions,
-            consistent_read=consistent_read)
+            consistent_read=consistent_read,
+            index_name=index_name)
 
     async def batch_write_item(self,
                                put_items=None,
@@ -174,7 +176,8 @@ class TableConnection(object):
                    segment=None,
                    total_segments=None,
                    exclusive_start_key=None,
-                   consistent_read=None):
+                   consistent_read=None,
+                   index_name=None):
         """
         Performs the scan operation
         """
@@ -189,7 +192,8 @@ class TableConnection(object):
             segment=segment,
             total_segments=total_segments,
             exclusive_start_key=exclusive_start_key,
-            consistent_read=consistent_read)
+            consistent_read=consistent_read,
+            index_name=index_name)
 
     async def query(self,
                     hash_key,

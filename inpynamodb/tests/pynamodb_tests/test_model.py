@@ -20,7 +20,8 @@ from inpynamodb.attributes import MapAttribute, UnicodeAttribute, UTCDateTimeAtt
 from inpynamodb.indexes import AllProjection, IncludeProjection, KeysOnlyProjection, Index
 
 from inpynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, RESPONSES, \
-    BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS, ALL, KEYS_ONLY, INCLUDE, MAP_SHORT, LIST_SHORT, NUMBER_SHORT
+    BINARY_SHORT, DEFAULT_ENCODING, UNPROCESSED_ITEMS, ALL, KEYS_ONLY, INCLUDE, MAP_SHORT, LIST_SHORT, NUMBER_SHORT, \
+    EXCLUSIVE_START_KEY, CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY
 from inpynamodb.indexes import LocalSecondaryIndex, GlobalSecondaryIndex
 from inpynamodb.models import Model, ResultSet
 from inpynamodb.tests.pynamodb_tests.data import MODEL_TABLE_DATA, SIMPLE_MODEL_TABLE_DATA, \
@@ -48,6 +49,8 @@ class GamePlayerOpponentIndex(LocalSecondaryIndex):
         write_capacity_units = 1
         table_name = "GamePlayerOpponentIndex"
         host = "http://localhost:8000"
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
         projection = AllProjection()
 
     player_id = UnicodeAttribute(hash_key=True)
@@ -60,6 +63,8 @@ class GameOpponentTimeIndex(GlobalSecondaryIndex):
         write_capacity_units = 1
         table_name = "GameOpponentTimeIndex"
         host = "http://localhost:8000"
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
         projection = AllProjection()
 
     winner_id = UnicodeAttribute(hash_key=True)
@@ -72,6 +77,8 @@ class GameModel(Model):
         write_capacity_units = 1
         table_name = "GameModel"
         host = "http://localhost:8000"
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     player_id = UnicodeAttribute(hash_key=True)
     created_time = UTCDateTimeAttribute(range_key=True)
@@ -134,6 +141,8 @@ class IndexedModel(Model):
 
     class Meta:
         table_name = 'IndexedModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     email = UnicodeAttribute()
@@ -151,6 +160,8 @@ class LocalIndexedModel(Model):
 
     class Meta:
         table_name = 'LocalIndexedModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     email = UnicodeAttribute()
@@ -167,6 +178,8 @@ class SimpleUserModel(Model):
 
     class Meta:
         table_name = 'SimpleModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     email = UnicodeAttribute()
@@ -194,6 +207,8 @@ class CustomAttrNameModel(Model):
 
     class Meta:
         table_name = 'CustomAttrModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     overidden_user_name = UnicodeAttribute(hash_key=True, attr_name='user_name')
     overidden_user_id = UnicodeAttribute(range_key=True, attr_name='user_id')
@@ -210,6 +225,8 @@ class UserModel(Model):
         table_name = 'UserModel'
         read_capacity_units = 25
         write_capacity_units = 25
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     custom_user_name = UnicodeAttribute(hash_key=True, attr_name='user_name')
     user_id = UnicodeAttribute(range_key=True)
@@ -227,6 +244,8 @@ class HostSpecificModel(Model):
     class Meta:
         host = 'http://localhost'
         table_name = 'RegionSpecificModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     user_id = UnicodeAttribute(range_key=True)
@@ -240,6 +259,8 @@ class RegionSpecificModel(Model):
     class Meta:
         region = 'us-west-1'
         table_name = 'RegionSpecificModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     user_id = UnicodeAttribute(range_key=True)
@@ -252,6 +273,8 @@ class ComplexKeyModel(Model):
 
     class Meta:
         table_name = 'ComplexKey'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     name = UnicodeAttribute(hash_key=True)
     date_created = UTCDateTimeAttribute(default=datetime.utcnow)
@@ -276,6 +299,8 @@ class Person(MapAttribute):
 class ComplexModel(Model):
     class Meta:
         table_name = 'ComplexModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     person = Person(attr_name='weird_person')
     key = NumberAttribute(hash_key=True)
@@ -284,6 +309,8 @@ class ComplexModel(Model):
 class OfficeEmployee(Model):
     class Meta:
         table_name = 'OfficeEmployeeModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     office_employee_id = NumberAttribute(hash_key=True)
     person = Person()
@@ -301,6 +328,8 @@ class CarInfoMap(MapAttribute):
 class CarModel(Model):
     class Meta:
         table_name = 'CarModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     car_id = NumberAttribute(null=False)
     car_info = CarInfoMap(null=False)
@@ -309,6 +338,8 @@ class CarModel(Model):
 class CarModelWithNull(Model):
     class Meta:
         table_name = 'CarModelWithNull'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     car_id = NumberAttribute(null=False)
     car_color = UnicodeAttribute(null=True)
@@ -327,6 +358,8 @@ class OfficeEmployeeMap(MapAttribute):
 class GroceryList(Model):
     class Meta:
         table_name = 'GroceryListModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     store_name = UnicodeAttribute(hash_key=True)
     groceries = ListAttribute()
@@ -335,6 +368,8 @@ class GroceryList(Model):
 class Office(Model):
     class Meta:
         table_name = 'OfficeModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     office_id = NumberAttribute(hash_key=True)
     address = Location()
@@ -344,6 +379,8 @@ class Office(Model):
 class BooleanConversionModel(Model):
     class Meta:
         table_name = 'BooleanConversionTable'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     user_name = UnicodeAttribute(hash_key=True)
     is_human = BooleanAttribute()
@@ -368,6 +405,8 @@ class TreeLeaf(MapAttribute):
 class TreeModel(Model):
     class Meta:
         table_name = 'TreeModelTable'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     tree_key = UnicodeAttribute(hash_key=True)
     left = TreeLeaf()
@@ -377,6 +416,8 @@ class TreeModel(Model):
 class ExplicitRawMapModel(Model):
     class Meta:
         table_name = 'ExplicitRawMapModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     map_id = NumberAttribute(hash_key=True, default=123)
     map_attr = MapAttribute()
@@ -391,6 +432,8 @@ class MapAttrSubClassWithRawMapAttr(MapAttribute):
 class ExplicitRawMapAsMemberOfSubClass(Model):
     class Meta:
         table_name = 'ExplicitRawMapAsMemberOfSubClass'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     map_id = NumberAttribute(hash_key=True)
     sub_attr = MapAttrSubClassWithRawMapAttr()
@@ -412,6 +455,8 @@ class OverriddenSessionModel(Model):
 
     class Meta:
         table_name = 'OverriddenSessionModel'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
         request_timeout_seconds = 9999
         max_retry_attempts = 200
         base_backoff_ms = 4120
@@ -428,6 +473,8 @@ class Animal(Model):
 class Dog(Animal):
     class Meta:
         table_name = 'Dog'
+        aws_access_key_id = 'foo'
+        aws_secret_access_key = 'bar'
 
     breed = UnicodeAttribute()
 
@@ -620,28 +667,6 @@ class ModelTestCase(TestCase):
         }
         self.assert_dict_lists_equal(correct_schema['KeySchema'], schema['key_schema'])
         self.assert_dict_lists_equal(correct_schema['AttributeDefinitions'], schema['attribute_definitions'])
-
-    @pytest.mark.asyncio
-    async def test_overidden_session(self):
-        """
-        Custom session
-        """
-        fake_db = CoroutineMock()
-
-        with patch(PATCH_METHOD, new=fake_db):
-            with patch("inpynamodb.connection.TableConnection.describe_table") as req:
-                req.return_value = None
-                await OverriddenSessionModel.create_table(read_capacity_units=2, write_capacity_units=2, wait=True)
-
-        self.assertEqual(OverriddenSessionModel.Meta.request_timeout_seconds, 9999)
-        self.assertEqual(OverriddenSessionModel.Meta.max_retry_attempts, 200)
-        self.assertEqual(OverriddenSessionModel.Meta.base_backoff_ms, 4120)
-        self.assertTrue(OverriddenSessionModel.Meta.session_cls is OverriddenSession)
-
-        self.assertEqual(OverriddenSessionModel._connection.connection._request_timeout_seconds, 9999)
-        self.assertEqual(OverriddenSessionModel._connection.connection._max_retry_attempts_exception, 200)
-        self.assertEqual(OverriddenSessionModel._connection.connection._base_backoff_ms, 4120)
-        self.assertTrue(type(OverriddenSessionModel._connection.connection.requests_session) is OverriddenSession)
 
     @pytest.mark.asyncio
     async def test_overridden_attr_name(self):
@@ -3000,6 +3025,260 @@ class ModelTestCase(TestCase):
         )
 
     @pytest.mark.asyncio
+    async def test_rate_limited_scan(self):
+        """
+        Model.rate_limited_scan
+        """
+        with patch('inpynamodb.connection.AsyncConnection.rate_limited_scan') as req:
+            items = []
+
+            item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+            item['user_id'] = {STRING_SHORT: '11232'}
+            items.append(item)
+
+            req.return_value = items
+            self.assertEqual(1, len(UserModel.rate_limited_scan(
+                segment=1,
+                total_segments=12,
+                limit=16,
+                conditional_operator='AND',
+                last_evaluated_key='XXX',
+                page_size=11,
+                timeout_seconds=21,
+                read_capacity_to_consume_per_second=33,
+                allow_rate_limited_scan_without_consumed_capacity=False,
+                max_sleep_between_retry=4,
+                max_consecutive_exceptions=22,
+                attributes_to_get=['X1', 'X2'],
+                consistent_read=True,
+                index_name='index'
+            )))
+
+            self.assertEqual('UserModel', req.call_args[0][0])
+            params = {
+                'filter_condition': None,
+                'segment': 1,
+                'total_segments': 12,
+                'limit': 16,
+                'conditional_operator': 'AND',
+                'exclusive_start_key': 'XXX',
+                'page_size': 11,
+                'timeout_seconds': 21,
+                'scan_filter': {},
+                'attributes_to_get': ['X1', 'X2'],
+                'read_capacity_to_consume_per_second': 33,
+                'allow_rate_limited_scan_without_consumed_capacity': False,
+                'max_sleep_between_retry': 4,
+                'max_consecutive_exceptions': 22,
+                'consistent_read': True,
+                'index_name': 'index'
+            }
+            self.assertEqual(params, req.call_args[1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Items': items}
+            scanned_items = []
+
+            for item in await UserModel.rate_limited_scan(limit=5):
+                scanned_items.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items[:5]],
+                scanned_items
+            )
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Items': items, 'ConsumedCapacity': {'TableName': 'UserModel', 'CapacityUnits': 10}}
+            scan_result = await UserModel.rate_limited_scan(
+                user_id__contains='tux',
+                zip_code__null=False,
+                email__null=True,
+                read_capacity_to_consume_per_second=13
+            )
+
+            for item in scan_result:
+                self.assertIsNotNone(item)
+            params = {
+                'Limit': 13,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) AND contains (#1, :0)) AND attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    }
+                },
+                'TableName': 'UserModel'
+            }
+            self.assertEquals(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            for item in await UserModel.scan(
+                    user_id__contains='tux',
+                    zip_code__null=False,
+                    conditional_operator='OR',
+                    email__null=True,
+                    page_size=12):
+                self.assertIsNotNone(item)
+            params = {
+                'Limit': 12,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) OR contains (#1, :0)) OR attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    },
+                },
+                'TableName': 'UserModel'
+            }
+
+            self.assertEquals(params, req.call_args[0][1])
+
+        async def _multiple_scan():
+            return list(await UserModel.scan(user_id__contains='tux', user_id__beginswith='penguin'))
+
+        # you cannot scan with multiple conditions against the same key
+        self.assertAsyncRaises(
+            ValueError,
+            _multiple_scan()
+        )
+
+    @pytest.mark.asyncio
+    async def test_scan(self):
+        """
+        Model.scan
+        """
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            scanned_items = []
+            async for item in await UserModel.scan():
+                scanned_items.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items],
+                scanned_items
+            )
+
+        def fake_scan(*args):
+            kwargs = args[1]
+            start_key = kwargs.get(EXCLUSIVE_START_KEY, None)
+            if start_key:
+                item_idx = 0
+                for scan_item in BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name):
+                    item_idx += 1
+                    if scan_item == start_key:
+                        break
+                scan_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[item_idx:item_idx + 1]
+            else:
+                scan_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[:1]
+            data = {
+                CAMEL_COUNT: len(scan_items),
+                ITEMS: scan_items,
+                LAST_EVALUATED_KEY: scan_items[-1] if len(scan_items) else None
+            }
+            return data
+
+        mock_scan = CoroutineMock()
+        mock_scan.side_effect = fake_scan
+
+        with patch(PATCH_METHOD, new=mock_scan) as req:
+            async for item in await UserModel.scan():
+                self.assertIsNotNone(item)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            async for item in await UserModel.scan(user_id__contains='tux', zip_code__null=False, email__null=True):
+                self.assertIsNotNone(item)
+            params = {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) AND contains (#1, :0)) AND attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    }
+                },
+                'TableName': 'UserModel'
+            }
+            self.assertEquals(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'Items': items}
+            async for item in await UserModel.scan(
+                    user_id__contains='tux',
+                    zip_code__null=False,
+                    conditional_operator='OR',
+                    email__null=True):
+                self.assertIsNotNone(item)
+            params = {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) OR contains (#1, :0)) OR attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    }
+                },
+                'TableName': 'UserModel'
+            }
+            self.assertEquals(params, req.call_args[0][1])
+
+        async def _multiple_scan():
+            return list(await UserModel.scan(user_id__contains='tux', user_id__beginswith='penguin'))
+
+        # you cannot scan with multiple conditions against the same key
+        self.assertAsyncRaises(
+            ValueError,
+            _multiple_scan()
+        )
+
+    @pytest.mark.asyncio
     async def test_model_with_maps(self):
         office_employee = await self._get_office_employee()
         with patch(PATCH_METHOD) as req:
@@ -3335,7 +3614,7 @@ class ModelTestCase(TestCase):
             with self.assertRaises(NotImplementedError):
                 list(await ComplexModel.query(123, limit=20, conditional_operator='OR'))
             with self.assertRaises(NotImplementedError):
-                list(ComplexModel.scan(conditional_operator='OR'))
+                list(await ComplexModel.scan(conditional_operator='OR'))
 
     @pytest.mark.asyncio
     async def test_result_set_init(self):
