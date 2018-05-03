@@ -7,14 +7,14 @@ class TableConnection(object):
     """
 
     def __init__(self, table_name, region=None, host=None, session_cls=None, request_timeout_seconds=None,
-                 max_retry_attempts=None, base_backoff_ms=None, aws_access_key_id=None, aws_secret_accees_key=None):
+                 max_retry_attempts=None, base_backoff_ms=None, aws_access_key_id=None, aws_secret_access_key=None):
         self._hash_keyname = None
         self._range_keyname = None
         self.table_name = table_name
         self.connection = AsyncConnection(region=region, host=host, request_timeout_seconds=request_timeout_seconds,
                                           max_retry_attempts=max_retry_attempts, base_backoff_ms=base_backoff_ms,
                                           aws_access_key_id=aws_access_key_id,
-                                          aws_secret_access_key=aws_secret_accees_key)
+                                          aws_secret_access_key=aws_secret_access_key)
 
     async def put_item(self, hash_key,
                        range_key=None,
