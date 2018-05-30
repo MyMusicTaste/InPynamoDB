@@ -282,8 +282,25 @@ class AttributeContainer(object):
                 raise ValueError("Attribute {0} specified does not exist".format(attr_name))
             setattr(self, attr_name, attr_value)
 
-    def as_dict(self, attributes_to_get=None):
+    def as_dict(self, attributes_to_get=None, include_none=True):
         result = {}
+
+        if include_none:
+            if attributes_to_get is None:
+                for k in self._get_attributes().keys():
+                    attr_value = self.__getattribute__(k)
+                    if isinstance(attr_value, MapAttribute):
+                        result[k] = attr_value.as_dict(include_none=include_none)
+                    else:
+                        result[k] = attr_value
+            else:
+                for k, v in self._get_attributes().items():
+                    if k in attributes_to_get:
+                        attr_value = self.__getattribute__(k)
+                        if isinstance(v, MapAttribute):
+                            result[k] = attr_value.as_dict(include_none=include_none)
+                        else:
+                            result[k] = v
 
         if attributes_to_get is None:
             for key, value in six.iteritems(self.attribute_values):
@@ -845,8 +862,25 @@ class MapAttribute(Attribute, AttributeContainer, metaclass=MapAttributeMeta):
     def is_raw(cls):
         return cls == MapAttribute
 
-    def as_dict(self, attributes_to_get=None):
+    def as_dict(self, attributes_to_get=None, include_none=True):
         result = {}
+
+        if include_none:
+            if attributes_to_get is None:
+                for k in self._get_attributes().keys():
+                    attr_value = self.__getattribute__(k)
+                    if isinstance(attr_value, MapAttribute):
+                        result[k] = attr_value.as_dict(include_none=include_none)
+                    else:
+                        result[k] = attr_value
+            else:
+                for k, v in self._get_attributes().items():
+                    if k in attributes_to_get:
+                        attr_value = self.__getattribute__(k)
+                        if isinstance(v, MapAttribute):
+                            result[k] = attr_value.as_dict(include_none=include_none)
+                        else:
+                            result[k] = v
 
         if attributes_to_get is None:
             for key, value in six.iteritems(self.attribute_values):
