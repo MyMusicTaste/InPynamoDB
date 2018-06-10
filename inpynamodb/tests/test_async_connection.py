@@ -1,4 +1,9 @@
+import json
+
+import aiohttp
+
 import pytest
+from aiohttp.web_response import Response
 from asynctest import patch, mock
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.constants import DEFAULT_REGION
@@ -9,7 +14,8 @@ from pynamodb.tests.data import DESCRIBE_TABLE_DATA, LIST_TABLE_DATA
 
 from inpynamodb.connection.base import AsyncConnection
 
-PATCH_METHOD = 'aiobotocore.client.AioBaseClient._make_api_call'
+# PATCH_METHOD = 'aiobotocore.client.AioBaseClient._make_api_call'
+PATCH_METHOD = 'inpynamodb.connection.AsyncConnection._make_api_call'
 
 
 class TestAsyncConnection:
@@ -2071,7 +2077,7 @@ class TestAsyncConnection:
         assert 1.0 == sleep_mock.call_args[0][0]
 
     @mock.patch('time.time')
-    @mock.patch('time.sleep')
+    @mock.patch('asyncio.sleep')
     @mock.patch(PATCH_METHOD)
     @pytest.mark.asyncio
     async def test_ratelimited_scan_exception_on_max_threshold(self, api_mock, sleep_mock, time_mock):
@@ -2087,3 +2093,146 @@ class TestAsyncConnection:
 
         assert 1 == len(sleep_mock.call_args_list)
         assert 2 == len(api_mock.call_args_list)
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch(PATCH_METHOD)
+    @pytest.mark.asyncio
+    async def test_ratelimited_scan_raises_other_client_errors(self, api_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        botocore_expected_format = {'Error': {'Message': 'm', 'Code': 'ConditionCheckFailedException'}}
+
+        api_mock.side_effect = VerboseClientError(botocore_expected_format, 'operation_name', {})
+
+        with pytest.raises(ScanError):
+            values = [o async for o in c.rate_limited_scan('Table_1')]
+            assert 0 == len(values)
+
+        assert 1 == len(api_mock.call_args_list)
+        assert 0 == len(sleep_mock.call_args_list)
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch(PATCH_METHOD)
+    @pytest.mark.asyncio
+    async def test_ratelimited_scan_raises_non_client_error(self, api_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+
+        api_mock.side_effect = ScanError('error')
+
+        with pytest.raises(ScanError):
+            values = [o async for o in c.rate_limited_scan('Table_1')]
+            assert 0 == len(values)
+
+        assert 1 == len(api_mock.call_args_list)
+        assert 0 == len(sleep_mock.call_args_list)
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch('inpynamodb.connection.AsyncConnection.scan')
+    @pytest.mark.asyncio
+    async def test_rate_limited_scan_retries_on_rate_unavailable(self, scan_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        sleep_mock.return_value = 1
+        time_mock.side_effect = [1, 4, 6, 12]
+        scan_mock.side_effect = [
+            {'Items': ['Item-1'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 80},
+             'LastEvaluatedKey': 'XX'},
+            {'Items': ['Item-2'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 41}}
+        ]
+        values = [o async for o in c.rate_limited_scan('Table_1')]
+
+        assert 2 == len(values)
+        assert 2 == len(scan_mock.call_args_list)
+        assert 2 == len(sleep_mock.call_args_list)
+        assert 3.0 == sleep_mock.call_args_list[0][0][0]
+        assert 2.0 == sleep_mock.call_args_list[1][0][0]
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch('inpynamodb.connection.AsyncConnection.scan')
+    @pytest.mark.asyncio
+    async def test_rate_limited_scan_retries_on_rate_unavailable_within_s(self, scan_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        sleep_mock.return_value = 1
+        time_mock.side_effect = [1.0, 1.5, 4.0]
+        scan_mock.side_effect = [
+            {'Items': ['Item-1'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 10},
+             'LastEvaluatedKey': 'XX'},
+            {'Items': ['Item-2'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 11}}
+        ]
+        values = [o async for o in c.rate_limited_scan('Table_1', read_capacity_to_consume_per_second=5)]
+
+        assert 2 == len(values)
+        assert 2 == len(scan_mock.call_args_list)
+        assert 1 == len(sleep_mock.call_args_list)
+        assert 2.0 == sleep_mock.call_args_list[0][0][0]
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch('inpynamodb.connection.AsyncConnection.scan')
+    @pytest.mark.asyncio
+    async def test_rate_limited_scan_retries_max_sleep(self, scan_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        sleep_mock.return_value = 1
+        time_mock.side_effect = [1.0, 1.5, 250, 350]
+        scan_mock.side_effect = [
+            {'Items': ['Item-1'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 1000},
+             'LastEvaluatedKey': 'XX'},
+            {'Items': ['Item-2'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 11}}
+        ]
+        values = [o async for o in c.rate_limited_scan(
+            'Table_1',
+            read_capacity_to_consume_per_second=5,
+            max_sleep_between_retry=8
+        )]
+
+        assert 2 == len(values)
+        assert 2 == len(scan_mock.call_args_list)
+        assert 1 == len(sleep_mock.call_args_list)
+        assert 8.0 == sleep_mock.call_args_list[0][0][0]
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch('inpynamodb.connection.AsyncConnection.scan')
+    @pytest.mark.asyncio
+    async def test_rate_limited_scan_retries_min_sleep(self, scan_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        sleep_mock.return_value = 1
+        time_mock.side_effect = [1, 2, 3, 4]
+        scan_mock.side_effect = [
+            {'Items': ['Item-1'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 10},
+             'LastEvaluatedKey': 'XX'},
+            {'Items': ['Item-2'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 11}}
+        ]
+
+        values = [o async for o in c.rate_limited_scan('Table_1', read_capacity_to_consume_per_second=8)]
+
+        assert 2 == len(values)
+        assert 2 == len(scan_mock.call_args_list)
+        assert 1 == len(sleep_mock.call_args_list)
+        assert 1.0 == sleep_mock.call_args_list[0][0][0]
+
+    @mock.patch('time.time')
+    @mock.patch('asyncio.sleep')
+    @mock.patch('inpynamodb.connection.AsyncConnection.scan')
+    @pytest.mark.asyncio
+    async def test_rate_limited_scan_retries_timeout(self, scan_mock, sleep_mock, time_mock):
+        c = AsyncConnection()
+        sleep_mock.return_value = 1
+        time_mock.side_effect = [1, 20, 30, 40]
+        scan_mock.side_effect = [
+            {'Items': ['Item-1'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 1000},
+             'LastEvaluatedKey': 'XX'},
+            {'Items': ['Item-2'], 'ConsumedCapacity': {'TableName': 'Table_1', 'CapacityUnits': 11}}
+        ]
+
+        with pytest.raises(ScanError):
+            values = [o async for o in c.rate_limited_scan(
+                'Table_1',
+                read_capacity_to_consume_per_second=1,
+                timeout_seconds=15
+            )]
+            assert 0 == len(values)
+
+        assert 0 == len(sleep_mock.call_args_list)

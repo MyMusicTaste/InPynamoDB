@@ -1,6 +1,9 @@
 """
 Lowest level connection
 """
+import random
+
+import aiohttp
 import asyncio
 import logging
 import math
@@ -26,7 +29,7 @@ from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE
     COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, SELECT_VALUES, \
     SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN
 from pynamodb.exceptions import TableError, TableDoesNotExist, DeleteError, UpdateError, PutError, GetError, QueryError, \
-    ScanError
+    ScanError, VerboseClientError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
@@ -46,6 +49,20 @@ class AsyncConnection(Connection):
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"
 
+    async def _create_prepared_request(self, request_dict, operation_model):
+        """
+        Create a prepared request object from request_dict, and operation_model
+        """
+        boto_prepared_request = self.client._endpoint.create_request(request_dict, operation_model)
+
+        async with aiohttp.ClientSession() as session:
+            return session.request(
+                boto_prepared_request.method,
+                boto_prepared_request.url,
+                data=boto_prepared_request.body,
+                headers=boto_prepared_request.headers
+            )
+
     async def dispatch(self, operation_name, operation_kwargs):
         """
         Dispatches `operation_name` with arguments `operation_kwargs`
@@ -61,7 +78,7 @@ class AsyncConnection(Connection):
         # req_uuid = uuid.uuid4()
 
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
-        data = await self.client._make_api_call(operation_name, operation_kwargs)
+        data = await self._make_api_call(operation_name, operation_kwargs)
         # self.send_post_boto_callback(operation_name, req_uuid, table_name)
 
         if data and CONSUMED_CAPACITY in data:
@@ -70,6 +87,91 @@ class AsyncConnection(Connection):
                 capacity = capacity.get(CAPACITY_UNITS)
             log.debug("%s %s consumed %s units", data.get(TABLE_NAME, ''), operation_name, capacity)
         return data
+
+    async def _make_api_call(self, operation_name, operation_kwargs):
+        operation_model = self.client._service_model.operation_model(operation_name)
+        request_dict = self.client._convert_to_request_dict(
+            operation_kwargs,
+            operation_model
+        )
+        request = await self._create_prepared_request(request_dict, operation_model)
+
+        for i in range(0, self._max_retry_attempts_exception + 1):
+            attempt_number = i + 1
+            is_last_attempt_for_exceptions = i == self._max_retry_attempts_exception
+
+            response = None
+            try:
+                response = await request(
+                    timeout=self._request_timeout_seconds,
+                    proxies=self.client._endpoint.proxies,
+                )
+
+                data = await response.json()
+
+            except (aiohttp.ClientResponseError, ValueError) as e:
+                if is_last_attempt_for_exceptions:
+                    log.debug('Reached the maximum number of retry attempts: %s', attempt_number)
+                    if response:
+                        e.args += (str(response.content),)
+                    raise
+
+                else:
+                    # No backoff for fast-fail exceptions that likely failed at the frontend
+                    log.debug(
+                        'Retry needed for (%s) after attempt %s, retryable %s caught: %s',
+                        operation_name,
+                        attempt_number,
+                        e.__class__.__name__,
+                        e
+                    )
+                    continue
+
+            if response.status_code >= 300:
+                # Extract error code from __type
+                code = data.get('__type', '')
+                if '#' in code:
+                    code = code.rsplit('#', 1)[1]
+                botocore_expected_format = {'Error': {'Message': data.get('message', ''), 'Code': code}}
+                verbose_properties = {
+                    'request_id': response.headers.get('x-amzn-RequestId')
+                }
+
+                if 'RequestItems' in operation_kwargs:
+                    # Batch operations can hit multiple tables, report them comma separated
+                    verbose_properties['table_name'] = ','.join(operation_kwargs['RequestItems'])
+                else:
+                    verbose_properties['table_name'] = operation_kwargs.get('TableName')
+
+                try:
+                    raise VerboseClientError(botocore_expected_format, operation_name, verbose_properties)
+                except VerboseClientError as e:
+                    if is_last_attempt_for_exceptions:
+                        log.debug('Reached the maximum number of retry attempts: %s', attempt_number)
+                        raise
+                    elif response.status_code < 500 and code != 'ProvisionedThroughputExceededException':
+                        # We don't retry on a ConditionalCheckFailedException or other 4xx (except for
+                        # throughput related errors) because we assume they will fail in perpetuity.
+                        # Retrying when there is already contention could cause other problems
+                        # in part due to unnecessary consumption of throughput.
+                        raise
+                    else:
+                        # We use fully-jittered exponentially-backed-off retries:
+                        #  https://www.awsarchitectureblog.com/2015/03/backoff.html
+                        sleep_time_ms = random.randint(0, self._base_backoff_ms * (2 ** i))
+                        log.debug(
+                            'Retry with backoff needed for (%s) after attempt %s,'
+                            'sleeping for %s milliseconds, retryable %s caught: %s',
+                            operation_name,
+                            attempt_number,
+                            sleep_time_ms,
+                            e.__class__.__name__,
+                            e
+                        )
+                        asyncio.sleep(sleep_time_ms / 1000.0)
+                        continue
+
+            return self._handle_binary_attributes(data)
 
     @property
     def session(self):
