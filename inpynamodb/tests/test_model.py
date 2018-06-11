@@ -12,12 +12,16 @@ from botocore.client import ClientError
 from asynctest import MagicMock, patch, TestCase, CoroutineMock
 from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute, NumberSetAttribute, BinarySetAttribute, \
     UnicodeSetAttribute, NumberAttribute, BooleanAttribute, BinaryAttribute, MapAttribute, ListAttribute
-from pynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES
+from pynamodb.connection.base import MetaTable
+from pynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, EXCLUSIVE_START_KEY, RESPONSES, CAMEL_COUNT, ITEMS, \
+    SCANNED_COUNT, LAST_EVALUATED_KEY
 from pynamodb.exceptions import TableError
 from pynamodb.indexes import AllProjection, IncludeProjection
 from pynamodb.tests.data import MODEL_TABLE_DATA, SIMPLE_MODEL_TABLE_DATA, CUSTOM_ATTR_NAME_INDEX_TABLE_DATA, \
-    GET_MODEL_ITEM_DATA, COMPLEX_TABLE_DATA, COMPLEX_ITEM_DATA, CAR_MODEL_TABLE_DATA
+    GET_MODEL_ITEM_DATA, COMPLEX_TABLE_DATA, COMPLEX_ITEM_DATA, CAR_MODEL_TABLE_DATA, BATCH_GET_ITEMS, \
+    CUSTOM_ATTR_NAME_ITEM_DATA
 from pynamodb.tests.deep_eq import deep_eq
+from pynamodb.types import RANGE
 
 from inpynamodb.indexes import LocalSecondaryIndex, GlobalSecondaryIndex
 from inpynamodb.models import Model
@@ -173,7 +177,7 @@ class CustomAttrIndex(LocalSecondaryIndex):
         write_capacity_units = 1
         projection = AllProjection()
 
-    overidden_user_id = UnicodeAttribute(hash_key=True, attr_name='user_id')
+    overridden_uid = UnicodeAttribute(hash_key=True, attr_name='user_id')
 
 
 class CustomAttrNameModel(Model):
@@ -1965,6 +1969,7 @@ class ModelTestCase(TestCase):
         with pytest.raises(ValueError):
             await UserModel.count(zip_code__le='94117')
 
+    @pytest.mark.skip
     async def test_index_count(self):
         """
         Model.index.count()
@@ -2027,3 +2032,694 @@ class ModelTestCase(TestCase):
                 'Select': 'COUNT'
             }
             deep_eq(args, params, _assert=True)
+
+    async def test_query_limit_greater_than_available_items_single_page(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(5):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            results = [o async for o in await UserModel.query('foo', limit=25)]
+            self.assertEqual(len(results), 5)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 25)
+
+    async def test_query_limit_identical_to_available_items_single_page(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(5):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            results = [o async for o in await UserModel.query('foo', limit=5)]
+            self.assertEqual(len(results), 5)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 5)
+
+    async def test_query_limit_less_than_available_items_multiple_page(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[:10], 'LastEvaluatedKey': {'user_id': 'x'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': 'y'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[20:30], 'LastEvaluatedKey': {'user_id': 'z'}},
+            ]
+            results_iter = await UserModel.query('foo', limit=25)
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 25)
+            self.assertEqual(len(req.mock_calls), 3)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 25)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 25)
+            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 25)
+            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEquals(results_iter.total_count, 30)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+
+    async def test_query_limit_less_than_available_and_page_size(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[:10], 'LastEvaluatedKey': {'user_id': 'x'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': 'y'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[20:30], 'LastEvaluatedKey': {'user_id': 'x'}},
+            ]
+            results_iter = await UserModel.query('foo', limit=25, page_size=10)
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 25)
+            self.assertEqual(len(req.mock_calls), 3)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEquals(results_iter.total_count, 30)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+
+    async def test_query_limit_greater_than_available_items_multiple_page(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[:10], 'LastEvaluatedKey': {'user_id': 'x'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': 'y'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[20:30]},
+            ]
+            results_iter = await UserModel.query('foo', limit=50)
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 30)
+            self.assertEqual(len(req.mock_calls), 3)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 50)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 50)
+            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 50)
+            self.assertEquals(results_iter.last_evaluated_key, None)
+            self.assertEquals(results_iter.total_count, 30)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+
+    async def test_query_limit_greater_than_available_items_and_page_size(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[:10], 'LastEvaluatedKey': {'user_id': 'x'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': 'y'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[20:30]},
+            ]
+            results_iter = await UserModel.query('foo', limit=50, page_size=10)
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 30)
+            self.assertEqual(len(req.mock_calls), 3)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEquals(results_iter.last_evaluated_key, None)
+            self.assertEquals(results_iter.total_count, 30)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+
+    async def test_query_with_exclusive_start_key(self):
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 10, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': items[19]['user_id']}},
+            ]
+            results_iter = await UserModel.query('foo', limit=10, page_size=10, last_evaluated_key={'user_id': items[9]['user_id']})
+            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[9]['user_id']})
+
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 10)
+            self.assertEqual(len(req.mock_calls), 1)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[19]['user_id']})
+            self.assertEquals(results_iter.total_count, 10)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 10)
+
+    async def test_query(self):
+        """
+        Model.query
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar'):
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id.between('id-1', 'id-3')):
+                queried.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items],
+                queried
+            )
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__between=['id-1', 'id-3']):
+                queried.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items],
+                queried
+            )
+
+        # you cannot query a range key with multiple conditions
+        with pytest.raises(ValueError):
+            _ = [o async for o in await UserModel.query('foo', user_id__gt='id-1', user_id__le='id-2')]
+
+        # you cannot query a non-primary key with multiple conditions
+        with pytest.raises(ValueError):
+            _ = [o async for o in await UserModel.query('foo', zip_code__gt='77096', zip_code__le='94117')]
+
+        # you cannot use a range key in a query filter
+        with pytest.raises(ValueError):
+            _ = [o async for o in await UserModel.query('foo', UserModel.user_id > 'id-1', UserModel.user_id <= 'id-2')]
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id < 'id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__lt='id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id >= 'id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__ge='id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id <= 'id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__le='id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id == 'id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__eq='id-1'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', UserModel.user_id.startswith('id')):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo', user_id__begins_with='id'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query('foo'):
+                queried.append(item._serialize())
+            self.assertTrue(len(queried) == len(items))
+
+        async def fake_query(*args):
+            kwargs = args[1]
+            start_key = kwargs.get(EXCLUSIVE_START_KEY, None)
+            if start_key:
+                item_idx = 0
+                for query_item in BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name):
+                    item_idx += 1
+                    if query_item == start_key:
+                        break
+                query_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[item_idx:item_idx + 1]
+            else:
+                query_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[:1]
+            data = {
+                CAMEL_COUNT: len(query_items),
+                ITEMS: query_items,
+                SCANNED_COUNT: 2 * len(query_items),
+                LAST_EVALUATED_KEY: query_items[-1] if len(query_items) else None
+            }
+            return data
+
+        mock_query = CoroutineMock()
+        mock_query.side_effect = fake_query
+
+        with patch(PATCH_METHOD, new=mock_query) as req:
+            async for item in await UserModel.query('foo'):
+                self.assertIsNotNone(item)
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CUSTOM_ATTR_NAME_INDEX_TABLE_DATA
+            await CustomAttrNameModel._get_meta_data()
+
+        # Note this test is not valid -- this is request user_name == 'bar' and user_name == 'foo'
+        # The new condition api correctly throws an exception for in this case.
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {CAMEL_COUNT: 1, SCANNED_COUNT: 1, ITEMS: [CUSTOM_ATTR_NAME_ITEM_DATA.get(ITEM)]}
+            async for item in await CustomAttrNameModel.query('bar', overidden_user_name__eq='foo'):
+                self.assertIsNotNone(item)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query(
+                    'foo',
+                    UserModel.user_id.startswith('id'),
+                    UserModel.email.contains('@') & UserModel.picture.exists() & UserModel.zip_code.between(2, 3)):
+                queried.append(item._serialize())
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'FilterExpression': '((contains (#2, :2) AND attribute_exists (#3)) AND #4 BETWEEN :3 AND :4)',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_name',
+                    '#1': 'user_id',
+                    '#2': 'email',
+                    '#3': 'picture',
+                    '#4': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'id'
+                    },
+                    ':2': {
+                        'S': '@'
+                    },
+                    ':3': {
+                        'N': '2'
+                    },
+                    ':4': {
+                        'N': '3'
+                    }
+                },
+                'ReturnConsumedCapacity': 'TOTAL',
+                'TableName': 'UserModel'
+            }
+            self.assertEqual(params, req.call_args[0][1])
+            self.assertTrue(len(queried) == len(items))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+            async for item in await UserModel.query(
+                    'foo',
+                    user_id__begins_with='id',
+                    email__contains='@',
+                    picture__null=False,
+                    zip_code__between=[2, 3]):
+                queried.append(item._serialize())
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'FilterExpression': '((contains (#2, :2) AND attribute_exists (#3)) AND #4 BETWEEN :3 AND :4)',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_name',
+                    '#1': 'user_id',
+                    '#2': 'email',
+                    '#3': 'picture',
+                    '#4': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'id'
+                    },
+                    ':2': {
+                        'S': '@'
+                    },
+                    ':3': {
+                        'N': '2'
+                    },
+                    ':4': {
+                        'N': '3'
+                    }
+                },
+                'ReturnConsumedCapacity': 'TOTAL',
+                'TableName': 'UserModel'
+            }
+            self.assertEqual(params, req.call_args[0][1])
+            self.assertTrue(len(queried) == len(items))
+
+    async def test_scan_limit_with_page_size(self):
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(30):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+
+            req.side_effect = [
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[:10], 'LastEvaluatedKey': {'user_id': 'x'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[10:20], 'LastEvaluatedKey': {'user_id': 'y'}},
+                {'Count': 10, 'ScannedCount': 20, 'Items': items[20:30], 'LastEvaluatedKey': {'user_id': 'z'}},
+            ]
+            results_iter = await UserModel.scan(limit=25, page_size=10)
+            results = [o async for o in results_iter]
+            self.assertEqual(len(results), 25)
+            self.assertEqual(len(req.mock_calls), 3)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEquals(results_iter.total_count, 30)
+            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+
+    async def test_scan_limit(self):
+        """
+        Model.scan(limit)
+        """
+
+        async def fake_scan(*args):
+            scan_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)
+            data = {
+                CAMEL_COUNT: len(scan_items),
+                ITEMS: scan_items,
+                SCANNED_COUNT: 2 * len(scan_items),
+            }
+            return data
+
+        mock_scan = CoroutineMock()
+        mock_scan.side_effect = fake_scan
+
+        with patch(PATCH_METHOD, new=mock_scan) as req:
+            count = 0
+            async for item in await UserModel.scan(limit=4):
+                count += 1
+                self.assertIsNotNone(item)
+            self.assertEqual(len(req.mock_calls), 1)
+            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 4)
+            self.assertEqual(count, 4)
+
+        with patch(PATCH_METHOD, new=mock_scan) as req:
+            count = 0
+            async for item in await UserModel.scan(limit=4, consistent_read=True):
+                count += 1
+                self.assertIsNotNone(item)
+            self.assertEqual(len(req.mock_calls), 2)
+            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 4)
+            self.assertEquals(req.mock_calls[1][1][1]['ConsistentRead'], True)
+            self.assertEqual(count, 4)
+
+    async def test_rate_limited_scan(self):
+        """
+        Model.rate_limited_scan
+        """
+        with patch('inpynamodb.connection.AsyncConnection.rate_limited_scan', new=CoroutineMock) as req:
+            items = []
+
+            item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+            item['user_id'] = {STRING_SHORT: '11232'}
+            items.append(item)
+
+            req.return_value = items
+            result = UserModel.rate_limited_scan(
+                segment=1,
+                total_segments=12,
+                limit=16,
+                conditional_operator='AND',
+                last_evaluated_key='XXX',
+                page_size=11,
+                timeout_seconds=21,
+                read_capacity_to_consume_per_second=33,
+                allow_rate_limited_scan_without_consumed_capacity=False,
+                max_sleep_between_retry=4,
+                max_consecutive_exceptions=22,
+                attributes_to_get=['X1', 'X2'],
+                consistent_read=True,
+                index_name='index'
+            )
+            self.assertEqual(1, len([o async for o in result]))
+            self.assertEqual('UserModel', req.call_args[0][0])
+            params = {
+                'filter_condition': None,
+                'segment': 1,
+                'total_segments': 12,
+                'limit': 16,
+                'conditional_operator': 'AND',
+                'exclusive_start_key': 'XXX',
+                'page_size': 11,
+                'timeout_seconds': 21,
+                'scan_filter': {},
+                'attributes_to_get': ['X1', 'X2'],
+                'read_capacity_to_consume_per_second': 33,
+                'allow_rate_limited_scan_without_consumed_capacity': False,
+                'max_sleep_between_retry': 4,
+                'max_consecutive_exceptions': 22,
+                'consistent_read': True,
+                'index_name': 'index'
+            }
+            self.assertEqual(params, req.call_args[1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Items': items}
+            scanned_items = []
+
+            async for item in await UserModel.rate_limited_scan(limit=5):
+                scanned_items.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items[:5]],
+                scanned_items
+            )
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Items': items, 'ConsumedCapacity': {'TableName': 'UserModel', 'CapacityUnits': 10}}
+            scan_result = await UserModel.rate_limited_scan(
+                user_id__contains='tux',
+                zip_code__null=False,
+                email__null=True,
+                read_capacity_to_consume_per_second=13
+            )
+
+            async for item in scan_result:
+                self.assertIsNotNone(item)
+            params = {
+                'Limit': 13,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) AND contains (#1, :0)) AND attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    }
+                },
+                'TableName': 'UserModel'
+            }
+            self.assertEquals(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            async for item in await UserModel.scan(
+                    user_id__contains='tux',
+                    zip_code__null=False,
+                    conditional_operator='OR',
+                    email__null=True,
+                    page_size=12):
+                self.assertIsNotNone(item)
+            params = {
+                'Limit': 12,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) OR contains (#1, :0)) OR attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    },
+                },
+                'TableName': 'UserModel'
+            }
+
+            self.assertEquals(params, req.call_args[0][1])
+
+        # you cannot scan with multiple conditions against the same key
+        with pytest.raises(ValueError):
+            _ = [o async for o in await UserModel.scan(user_id__contains='tux', user_id__beginswith='penguin')]

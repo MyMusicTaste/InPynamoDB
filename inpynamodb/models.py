@@ -14,7 +14,8 @@ from pynamodb.constants import BATCH_GET_PAGE_LIMIT, RESPONSES, UNPROCESSED_KEYS
     LOCAL_SECONDARY_INDEXES, ATTR_DEFINITIONS, ATTR_NAME, TABLE_STATUS, ACTIVE, META_CLASS_NAME, REGION, HOST, \
     PUT_FILTER_OPERATOR_MAP, QUERY_FILTER_OPERATOR_MAP, QUERY_OPERATOR_MAP, ITEM, DELETE_FILTER_OPERATOR_MAP, \
     BATCH_WRITE_PAGE_LIMIT, PUT, DELETE, ATTRIBUTES, UNPROCESSED_ITEMS, PUT_REQUEST, DELETE_REQUEST, RETURN_VALUES, \
-    ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTR_TYPE_MAP, ITEM_COUNT, COUNT
+    ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTR_TYPE_MAP, ITEM_COUNT, COUNT, \
+    SCAN_OPERATOR_MAP, KEY
 from pynamodb.exceptions import DoesNotExist, TableError, TableDoesNotExist
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta, ModelContextManager as PynamoDBModelContextManager
 from pynamodb.types import HASH, RANGE
@@ -340,6 +341,141 @@ class Model(PynamoDBModel):
         if cls._meta_table is None:
             cls._meta_table = MetaTable(await cls._get_connection().describe_table())
         return cls._meta_table
+
+    @classmethod
+    async def rate_limited_scan(cls,
+                                filter_condition=None,
+                                attributes_to_get=None,
+                                segment=None,
+                                total_segments=None,
+                                limit=None,
+                                conditional_operator=None,
+                                last_evaluated_key=None,
+                                page_size=None,
+                                timeout_seconds=None,
+                                read_capacity_to_consume_per_second=10,
+                                allow_rate_limited_scan_without_consumed_capacity=None,
+                                max_sleep_between_retry=10,
+                                max_consecutive_exceptions=30,
+                                consistent_read=None,
+                                index_name=None,
+                                **filters):
+        """
+        Scans the items in the table at a definite rate.
+        Invokes the low level rate_limited_scan API.
+
+        :param filter_condition: Condition used to restrict the scan results
+        :param attributes_to_get: A list of attributes to return.
+        :param segment: If set, then scans the segment
+        :param total_segments: If set, then specifies total segments
+        :param limit: Used to limit the number of results returned
+        :param conditional_operator:
+        :param last_evaluated_key: If set, provides the starting point for scan.
+        :param page_size: Page size of the scan to DynamoDB
+        :param filters: A list of item filters
+        :param timeout_seconds: Timeout value for the rate_limited_scan method, to prevent it from running
+            infinitely
+        :param read_capacity_to_consume_per_second: Amount of read capacity to consume
+            every second
+        :param allow_rate_limited_scan_without_consumed_capacity: If set, proceeds without rate limiting if
+            the server does not support returning consumed capacity in responses.
+        :param max_sleep_between_retry: Max value for sleep in seconds in between scans during
+            throttling/rate limit scenarios
+        :param max_consecutive_exceptions: Max number of consecutive provision throughput exceeded
+            exceptions for scan to exit
+        :param consistent_read: If True, a consistent read is performed
+        """
+
+        cls._conditional_operator_check(conditional_operator)
+        key_filter, scan_filter = cls._build_filters(
+            SCAN_OPERATOR_MAP,
+            non_key_operator_map=SCAN_OPERATOR_MAP,
+            key_attribute_classes=cls.get_attributes(),
+            filters=filters
+        )
+        key_filter.update(scan_filter)
+
+        scan_result = await cls._get_connection().rate_limited_scan(
+            filter_condition=filter_condition,
+            attributes_to_get=attributes_to_get,
+            page_size=page_size,
+            limit=limit,
+            conditional_operator=conditional_operator,
+            scan_filter=key_filter,
+            segment=segment,
+            total_segments=total_segments,
+            exclusive_start_key=last_evaluated_key,
+            timeout_seconds=timeout_seconds,
+            read_capacity_to_consume_per_second=read_capacity_to_consume_per_second,
+            allow_rate_limited_scan_without_consumed_capacity=allow_rate_limited_scan_without_consumed_capacity,
+            max_sleep_between_retry=max_sleep_between_retry,
+            max_consecutive_exceptions=max_consecutive_exceptions,
+            consistent_read=consistent_read,
+            index_name=index_name
+        )
+
+        async for item in scan_result:
+            yield cls.from_raw_data(item)
+
+    @classmethod
+    async def scan(cls,
+                   filter_condition=None,
+                   segment=None,
+                   total_segments=None,
+                   limit=None,
+                   conditional_operator=None,
+                   last_evaluated_key=None,
+                   page_size=None,
+                   consistent_read=None,
+                   index_name=None,
+                   rate_limit=None,
+                   **filters):
+        """
+        Iterates through all items in the table
+
+        :param filter_condition: Condition used to restrict the scan results
+        :param segment: If set, then scans the segment
+        :param total_segments: If set, then specifies total segments
+        :param limit: Used to limit the number of results returned
+        :param conditional_operator:
+        :param last_evaluated_key: If set, provides the starting point for scan.
+        :param page_size: Page size of the scan to DynamoDB
+        :param filters: A list of item filters
+        :param consistent_read: If True, a consistent read is performed
+        """
+        cls._conditional_operator_check(conditional_operator)
+        key_filter, scan_filter = cls._build_filters(
+            SCAN_OPERATOR_MAP,
+            non_key_operator_map=SCAN_OPERATOR_MAP,
+            key_attribute_classes=cls.get_attributes(),
+            filters=filters
+        )
+        key_filter.update(scan_filter)
+
+        if page_size is None:
+            page_size = limit
+
+        scan_args = ()
+        scan_kwargs = dict(
+            filter_condition=filter_condition,
+            exclusive_start_key=last_evaluated_key,
+            segment=segment,
+            limit=page_size,
+            scan_filter=key_filter,
+            total_segments=total_segments,
+            conditional_operator=conditional_operator,
+            consistent_read=consistent_read,
+            index_name=index_name
+        )
+
+        return ResultIterator(
+            cls._get_connection().scan,
+            scan_args,
+            scan_kwargs,
+            map_fn=cls.from_raw_data,
+            limit=limit,
+            rate_limit=rate_limit,
+        )
 
     @classmethod
     async def exists(cls):
