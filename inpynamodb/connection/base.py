@@ -8,7 +8,6 @@ import asyncio
 import logging
 import math
 import time
-import uuid
 
 from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
@@ -936,11 +935,11 @@ class AsyncConnection(Connection):
 
         tbl = await self.get_meta_table(table_name)
         if tbl is None:
-            raise TableError("No such table: {0}".format(table_name))
+            raise TableError(f"No such table: {table_name}")
         if index_name:
             hash_keyname = tbl.get_index_hash_keyname(index_name)
             if not hash_keyname:
-                raise ValueError("No hash key attribute for index: {0}".format(index_name))
+                raise ValueError(f"No hash key attribute for index: {index_name}")
             range_keyname = tbl.get_index_range_keyname(index_name)
         else:
             hash_keyname = tbl.hash_keyname
