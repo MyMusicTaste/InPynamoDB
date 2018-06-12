@@ -123,7 +123,7 @@ class BatchWrite(ModelContextManager):
                 elif DELETE_REQUEST in item:
                     delete_items.append(item.get(DELETE_REQUEST).get(KEY))
             log.info("Resending %s unprocessed keys for batch operation", len(unprocessed_items))
-            data = self.model._get_connection().batch_write_item(
+            data = await self.model._get_connection().batch_write_item(
                 put_items=put_items,
                 delete_items=delete_items
             )
@@ -395,7 +395,7 @@ class Model(PynamoDBModel):
         )
         key_filter.update(scan_filter)
 
-        scan_result = await cls._get_connection().rate_limited_scan(
+        scan_result = cls._get_connection().rate_limited_scan(
             filter_condition=filter_condition,
             attributes_to_get=attributes_to_get,
             page_size=page_size,
@@ -700,6 +700,31 @@ class Model(PynamoDBModel):
                                               aws_access_key_id=cls.Meta.aws_access_key_id,
                                               aws_secret_access_key=cls.Meta.aws_secret_access_key)
         return cls._connection
+
+    @classmethod
+    async def get(cls,
+                  hash_key,
+                  range_key=None,
+                  consistent_read=False,
+                  attributes_to_get=None):
+        """
+        Returns a single object using the provided keys
+
+        :param hash_key: The hash key of the desired item
+        :param range_key: The range key of the desired item, only used when appropriate.
+        """
+        hash_key, range_key = await cls._serialize_keys(hash_key, range_key)
+        data = await cls._get_connection().get_item(
+            hash_key,
+            range_key=range_key,
+            consistent_read=consistent_read,
+            attributes_to_get=attributes_to_get
+        )
+        if data:
+            item_data = data.get(ITEM)
+            if item_data:
+                return await cls.from_raw_data(item_data)
+        raise cls.DoesNotExist()
 
     @classmethod
     async def from_raw_data(cls, data):

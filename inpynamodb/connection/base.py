@@ -13,7 +13,7 @@ from aiobotocore import get_session
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
 from pynamodb.connection import Connection
-from pynamodb.connection.base import MetaTable
+# from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE_TABLE, CREATE_TABLE, \
     RETURN_CONSUMED_CAPACITY, TOTAL, TABLE_NAME, CONSUMED_CAPACITY, CAPACITY_UNITS, SERVICE_NAME, TABLE_KEY, \
@@ -26,18 +26,179 @@ from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE
     ACTION, ATTR_UPDATE_ACTIONS, DELETE, PUT, UPDATE_EXPRESSION, UPDATE_ITEM, ITEM, PUT_ITEM, REQUEST_ITEMS, \
     PUT_REQUEST, DELETE_REQUEST, BATCH_WRITE_ITEM, CONSISTENT_READ, PROJECTION_EXPRESSION, KEYS, BATCH_GET_ITEM, \
     COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, SELECT_VALUES, \
-    SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN
+    SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN, \
+    EXCLUSIVE_START_KEY, SHORT_ATTR_TYPES
 from pynamodb.exceptions import TableError, TableDoesNotExist, DeleteError, UpdateError, PutError, GetError, QueryError, \
     ScanError, VerboseClientError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
 from pynamodb.settings import get_settings_value
+from pynamodb.types import RANGE, HASH
 
 BOTOCORE_EXCEPTIONS = (BotoCoreError, ClientError)
 
 log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
+
+
+class MetaTable(object):
+    """
+    A pythonic wrapper around table metadata
+    """
+
+    def __init__(self, data):
+        self.data = data or {}
+        self._range_keyname = None
+        self._hash_keyname = None
+
+    def __repr__(self):
+        if self.data:
+            return f"MetaTable<{self.data.get(TABLE_NAME)}>"
+
+    @property
+    def range_keyname(self):
+        """
+        Returns the name of this table's range key
+        """
+        if self._range_keyname is None:
+            for attr in self.data.get(KEY_SCHEMA):
+                if attr.get(KEY_TYPE) == RANGE:
+                    self._range_keyname = attr.get(ATTR_NAME)
+        return self._range_keyname
+
+    @property
+    def hash_keyname(self):
+        """
+        Returns the name of this table's hash key
+        """
+        if self._hash_keyname is None:
+            for attr in self.data.get(KEY_SCHEMA):
+                if attr.get(KEY_TYPE) == HASH:
+                    self._hash_keyname = attr.get(ATTR_NAME)
+                    break
+        return self._hash_keyname
+
+    def get_key_names(self, index_name=None):
+        """
+        Returns the names of the primary key attributes and index key attributes (if index_name is specified)
+        """
+        key_names = [self.hash_keyname]
+        if self.range_keyname:
+            key_names.append(self.range_keyname)
+        if index_name is not None:
+            index_hash_keyname = self.get_index_hash_keyname(index_name)
+            if index_hash_keyname not in key_names:
+                key_names.append(index_hash_keyname)
+            index_range_keyname = self.get_index_range_keyname(index_name)
+            if index_range_keyname is not None and index_range_keyname not in key_names:
+                key_names.append(index_range_keyname)
+        return key_names
+
+    def get_index_hash_keyname(self, index_name):
+        """
+        Returns the name of the hash key for a given index
+        """
+        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
+        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
+        indexes = []
+        if local_indexes:
+            indexes += local_indexes
+        if global_indexes:
+            indexes += global_indexes
+        for index in indexes:
+            if index.get(INDEX_NAME) == index_name:
+                for schema_key in index.get(KEY_SCHEMA):
+                    if schema_key.get(KEY_TYPE) == HASH:
+                        return schema_key.get(ATTR_NAME)
+
+    def get_index_range_keyname(self, index_name):
+        """
+        Returns the name of the hash key for a given index
+        """
+        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
+        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
+        indexes = []
+        if local_indexes:
+            indexes += local_indexes
+        if global_indexes:
+            indexes += global_indexes
+        for index in indexes:
+            if index.get(INDEX_NAME) == index_name:
+                for schema_key in index.get(KEY_SCHEMA):
+                    if schema_key.get(KEY_TYPE) == RANGE:
+                        return schema_key.get(ATTR_NAME)
+        return None
+
+    def get_item_attribute_map(self, attributes, item_key=ITEM, pythonic_key=True):
+        """
+        Builds up a dynamodb compatible AttributeValue map
+        """
+        if pythonic_key:
+            item_key = item_key
+        attr_map = {
+            item_key: {}
+        }
+        for key, value in attributes.items():
+            # In this case, the user provided a mapping
+            # {'key': {'S': 'value'}}
+            if isinstance(value, dict):
+                attr_map[item_key][key] = value
+            else:
+                attr_map[item_key][key] = {
+                    self.get_attribute_type(key): value
+                }
+        return attr_map
+
+    def get_attribute_type(self, attribute_name, value=None):
+        """
+        Returns the proper attribute type for a given attribute name
+        """
+        for attr in self.data.get(ATTR_DEFINITIONS):
+            if attr.get(ATTR_NAME) == attribute_name:
+                return attr.get(ATTR_TYPE)
+        if value is not None and isinstance(value, dict):
+            for key in SHORT_ATTR_TYPES:
+                if key in value:
+                    return key
+        attr_names = [attr.get(ATTR_NAME) for attr in self.data.get(ATTR_DEFINITIONS)]
+        raise ValueError("No attribute {0} in {1}".format(attribute_name, attr_names))
+
+    def get_identifier_map(self, hash_key, range_key=None, key=KEY):
+        """
+        Builds the identifier map that is common to several operations
+        """
+        kwargs = {
+            key: {
+                self.hash_keyname: {
+                    self.get_attribute_type(self.hash_keyname): hash_key
+                }
+            }
+        }
+        if range_key is not None:
+            kwargs[key][self.range_keyname] = {
+                self.get_attribute_type(self.range_keyname): range_key
+            }
+        return kwargs
+
+    def get_exclusive_start_key_map(self, exclusive_start_key):
+        """
+        Builds the exclusive start key attribute map
+        """
+        if isinstance(exclusive_start_key, dict) and self.hash_keyname in exclusive_start_key:
+            # This is useful when paginating results, as the LastEvaluatedKey returned is already
+            # structured properly
+            return {
+                EXCLUSIVE_START_KEY: exclusive_start_key
+            }
+        else:
+            return {
+                EXCLUSIVE_START_KEY: {
+                    self.hash_keyname: {
+                        self.get_attribute_type(self.hash_keyname): exclusive_start_key
+                    }
+                }
+            }
 
 
 class AsyncConnection(Connection):
@@ -998,7 +1159,7 @@ class AsyncConnection(Connection):
         # We read the conditional operator even without a query filter passed in to maintain existing behavior.
         conditional_operator = self.get_conditional_operator(conditional_operator or AND)
         if query_filters:
-            filter_expression = self._get_filter_expression(
+            filter_expression = await self._get_filter_expression(
                 table_name, query_filters, conditional_operator, name_placeholders, expression_attribute_values)
             operation_kwargs[FILTER_EXPRESSION] = filter_expression
         if select:

@@ -151,7 +151,7 @@ class TableConnection(object):
             consistent_read=consistent_read,
             attributes_to_get=attributes_to_get)
 
-    async def rate_limited_scan(
+    def rate_limited_scan(
             self,
             filter_condition=None,
             attributes_to_get=None,
@@ -172,7 +172,7 @@ class TableConnection(object):
         """
         Performs the scan operation with rate limited
         """
-        return await self.connection.rate_limited_scan(
+        return self.connection.rate_limited_scan(
             self.table_name,
             filter_condition=filter_condition,
             attributes_to_get=attributes_to_get,

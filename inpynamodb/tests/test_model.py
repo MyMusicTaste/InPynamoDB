@@ -8,18 +8,19 @@ import aiohttp
 import copy
 
 import pytest
+import base64
 from botocore.client import ClientError
 from asynctest import MagicMock, patch, TestCase, CoroutineMock
 from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute, NumberSetAttribute, BinarySetAttribute, \
     UnicodeSetAttribute, NumberAttribute, BooleanAttribute, BinaryAttribute, MapAttribute, ListAttribute
-from pynamodb.connection.base import MetaTable
 from pynamodb.constants import ITEM, STRING_SHORT, ATTRIBUTES, EXCLUSIVE_START_KEY, RESPONSES, CAMEL_COUNT, ITEMS, \
-    SCANNED_COUNT, LAST_EVALUATED_KEY
-from pynamodb.exceptions import TableError
+    SCANNED_COUNT, LAST_EVALUATED_KEY, REQUEST_ITEMS, KEYS, UNPROCESSED_KEYS, BINARY_SHORT, DEFAULT_ENCODING, \
+    UNPROCESSED_ITEMS
+from pynamodb.exceptions import TableError, DoesNotExist
 from pynamodb.indexes import AllProjection, IncludeProjection
 from pynamodb.tests.data import MODEL_TABLE_DATA, SIMPLE_MODEL_TABLE_DATA, CUSTOM_ATTR_NAME_INDEX_TABLE_DATA, \
     GET_MODEL_ITEM_DATA, COMPLEX_TABLE_DATA, COMPLEX_ITEM_DATA, CAR_MODEL_TABLE_DATA, BATCH_GET_ITEMS, \
-    CUSTOM_ATTR_NAME_ITEM_DATA
+    CUSTOM_ATTR_NAME_ITEM_DATA, SIMPLE_BATCH_GET_ITEMS, INDEX_TABLE_DATA, LOCAL_INDEX_TABLE_DATA
 from pynamodb.tests.deep_eq import deep_eq
 from pynamodb.types import RANGE
 
@@ -2033,6 +2034,44 @@ class ModelTestCase(TestCase):
             }
             deep_eq(args, params, _assert=True)
 
+    @pytest.mark.skip
+    async def test_index_multipage_count(self):
+        with patch(PATCH_METHOD) as req:
+            last_evaluated_key = {
+                'user_name': {'S': u'user'},
+                'user_id': {'S': '1234'},
+            }
+            req.side_effect = [
+                {'Count': 1000, 'ScannedCount': 1000, 'LastEvaluatedKey': last_evaluated_key},
+                {'Count': 42, 'ScannedCount': 42}
+            ]
+            res = await CustomAttrNameModel.uid_index.count('foo')
+            self.assertEqual(res, 1042)
+
+            args_one = req.call_args_list[0][0][1]
+            params_one = {
+                'KeyConditionExpression': '#0 = :0',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Select': 'COUNT'
+            }
+
+            args_two = req.call_args_list[1][0][1]
+            params_two = copy.deepcopy(params_one)
+            params_two['ExclusiveStartKey'] = last_evaluated_key
+
+            deep_eq(args_one, params_one, _assert=True)
+            deep_eq(args_two, params_two, _assert=True)
+
     async def test_query_limit_greater_than_available_items_single_page(self):
         with patch(PATCH_METHOD) as req:
             req.return_value = MODEL_TABLE_DATA
@@ -2587,18 +2626,23 @@ class ModelTestCase(TestCase):
             self.assertEquals(req.mock_calls[1][1][1]['ConsistentRead'], True)
             self.assertEqual(count, 4)
 
+    @pytest.mark.skip
     async def test_rate_limited_scan(self):
         """
         Model.rate_limited_scan
         """
-        with patch('inpynamodb.connection.AsyncConnection.rate_limited_scan', new=CoroutineMock) as req:
+        with patch('inpynamodb.connection.AsyncConnection.rate_limited_scan', new=CoroutineMock()) as req:
             items = []
 
-            item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-            item['user_id'] = {STRING_SHORT: '11232'}
-            items.append(item)
+            async def _mocked_rate_limited_scan(data):
+                for d in data:
+                    yield data
 
-            req.return_value = items
+            _item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+            _item['user_id'] = {STRING_SHORT: '11232'}
+            items.append(_item)
+
+            req.return_value = _mocked_rate_limited_scan(items)
             result = UserModel.rate_limited_scan(
                 segment=1,
                 total_segments=12,
@@ -2640,14 +2684,14 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD) as req:
             items = []
             for idx in range(10):
-                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-                items.append(item)
+                _item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                _item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(_item)
             req.return_value = {'Items': items}
             scanned_items = []
 
-            async for item in await UserModel.rate_limited_scan(limit=5):
-                scanned_items.append(item._serialize().get(RANGE))
+            async for _item in UserModel.rate_limited_scan(limit=5):
+                scanned_items.append(_item._serialize().get(RANGE))
             self.assertListEqual(
                 [item.get('user_id').get(STRING_SHORT) for item in items[:5]],
                 scanned_items
@@ -2656,21 +2700,130 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD) as req:
             items = []
             for idx in range(10):
-                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
-                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
-                items.append(item)
+                _item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                _item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(_item)
             req.return_value = {'Items': items, 'ConsumedCapacity': {'TableName': 'UserModel', 'CapacityUnits': 10}}
-            scan_result = await UserModel.rate_limited_scan(
+            scan_result = UserModel.rate_limited_scan(
                 user_id__contains='tux',
                 zip_code__null=False,
                 email__null=True,
                 read_capacity_to_consume_per_second=13
             )
 
-            async for item in scan_result:
-                self.assertIsNotNone(item)
+            async for _item in scan_result:
+                self.assertIsNotNone(_item)
             params = {
                 'Limit': 13,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) AND contains (#1, :0)) AND attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    }
+                },
+                'TableName': 'UserModel'
+            }
+            self.assertEquals(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                _item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                _item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(_item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            async for _item in await UserModel.scan(
+                    user_id__contains='tux',
+                    zip_code__null=False,
+                    conditional_operator='OR',
+                    email__null=True,
+                    page_size=12):
+                self.assertIsNotNone(_item)
+            params = {
+                'Limit': 12,
+                'ReturnConsumedCapacity': 'TOTAL',
+                'FilterExpression': '((attribute_not_exists (#0) OR contains (#1, :0)) OR attribute_exists (#2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_id',
+                    '#2': 'zip_code'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': 'tux'
+                    },
+                },
+                'TableName': 'UserModel'
+            }
+
+            self.assertEquals(params, req.call_args[0][1])
+
+        # you cannot scan with multiple conditions against the same key
+        with pytest.raises(ValueError):
+            _ = [o async for o in await UserModel.scan(user_id__contains='tux', user_id__beginswith='penguin')]
+
+    async def test_scan(self):
+        """
+        Model.scan
+        """
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            scanned_items = []
+            async for item in await UserModel.scan():
+                scanned_items.append(item._serialize().get(RANGE))
+            self.assertListEqual(
+                [item.get('user_id').get(STRING_SHORT) for item in items],
+                scanned_items
+            )
+
+        async def fake_scan(*args):
+            kwargs = args[1]
+            start_key = kwargs.get(EXCLUSIVE_START_KEY, None)
+            if start_key:
+                item_idx = 0
+                for scan_item in BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name):
+                    item_idx += 1
+                    if scan_item == start_key:
+                        break
+                scan_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[item_idx:item_idx + 1]
+            else:
+                scan_items = BATCH_GET_ITEMS.get(RESPONSES).get(UserModel.Meta.table_name)[:1]
+            data = {
+                CAMEL_COUNT: len(scan_items),
+                ITEMS: scan_items,
+                SCANNED_COUNT: 2 * len(scan_items),
+                LAST_EVALUATED_KEY: scan_items[-1] if len(scan_items) else None
+            }
+            return data
+
+        mock_scan = CoroutineMock()
+        mock_scan.side_effect = fake_scan
+
+        with patch(PATCH_METHOD, new=mock_scan) as req:
+            async for item in await UserModel.scan():
+                self.assertIsNotNone(item)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_id'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            async for item in await UserModel.scan(user_id__contains='tux', zip_code__null=False, email__null=True):
+                self.assertIsNotNone(item)
+            params = {
                 'ReturnConsumedCapacity': 'TOTAL',
                 'FilterExpression': '((attribute_not_exists (#0) AND contains (#1, :0)) AND attribute_exists (#2))',
                 'ExpressionAttributeNames': {
@@ -2698,11 +2851,9 @@ class ModelTestCase(TestCase):
                     user_id__contains='tux',
                     zip_code__null=False,
                     conditional_operator='OR',
-                    email__null=True,
-                    page_size=12):
+                    email__null=True):
                 self.assertIsNotNone(item)
             params = {
-                'Limit': 12,
                 'ReturnConsumedCapacity': 'TOTAL',
                 'FilterExpression': '((attribute_not_exists (#0) OR contains (#1, :0)) OR attribute_exists (#2))',
                 'ExpressionAttributeNames': {
@@ -2713,13 +2864,686 @@ class ModelTestCase(TestCase):
                 'ExpressionAttributeValues': {
                     ':0': {
                         'S': 'tux'
-                    },
+                    }
                 },
                 'TableName': 'UserModel'
             }
-
             self.assertEquals(params, req.call_args[0][1])
 
         # you cannot scan with multiple conditions against the same key
         with pytest.raises(ValueError):
             _ = [o async for o in await UserModel.scan(user_id__contains='tux', user_id__beginswith='penguin')]
+
+    async def test_get(self):
+        """
+        Model.get
+        """
+
+        async def fake_dynamodb(*args):
+            kwargs = args[1]
+            if kwargs == {'TableName': UserModel.Meta.table_name}:
+                return MODEL_TABLE_DATA
+            elif kwargs == {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'TableName': 'UserModel',
+                'Key': {
+                    'user_name': {'S': 'foo'},
+                    'user_id': {'S': 'bar'}
+                },
+                'ConsistentRead': False}:
+                    return GET_MODEL_ITEM_DATA
+            return MODEL_TABLE_DATA
+
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            item = await UserModel.get(
+                'foo',
+                'bar'
+            )
+            self.assertEqual(await item._get_keys(), {'user_id': 'bar', 'user_name': 'foo'})
+            params = {
+                'ConsistentRead': False,
+                'Key': {
+                    'user_id': {
+                        'S': 'bar'
+                    },
+                    'user_name': {
+                        'S': 'foo'
+                    }
+                },
+                'ReturnConsumedCapacity': 'TOTAL',
+                'TableName': 'UserModel'
+            }
+            self.assertEqual(req.call_args[0][1], params)
+            item.zip_code = 88030
+            self.assertEqual(item.zip_code, 88030)
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            with pytest.raises(UserModel.DoesNotExist):
+                await UserModel.get('foo', 'bar')
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            try:
+                await UserModel.get('foo')
+            except SimpleUserModel.DoesNotExist:
+                self.fail('DoesNotExist exceptions must be distinct per-model')
+            except UserModel.DoesNotExist:
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            try:
+                await UserModel.get('foo')
+            except DoesNotExist:
+                pass
+            except UserModel.DoesNotExist:
+                self.fail('UserModel.Exception must derive from pynamodb.Exceptions.DoesNotExist')
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CUSTOM_ATTR_NAME_INDEX_TABLE_DATA
+            await CustomAttrNameModel._get_meta_data()
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {"ConsumedCapacity": {"CapacityUnits": 0.5, "TableName": "UserModel"}}
+            with pytest.raises(CustomAttrNameModel.DoesNotExist):
+                await CustomAttrNameModel.get('foo', 'bar')
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+            with pytest.raises(CustomAttrNameModel.DoesNotExist):
+                await CustomAttrNameModel.get('foo', 'bar')
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CUSTOM_ATTR_NAME_ITEM_DATA
+            item = await CustomAttrNameModel.get('foo', 'bar')
+            self.assertEqual(item.overidden_attr, CUSTOM_ATTR_NAME_ITEM_DATA['Item']['foo_attr']['S'])
+            self.assertEqual(item.overidden_user_name, CUSTOM_ATTR_NAME_ITEM_DATA['Item']['user_name']['S'])
+            self.assertEqual(item.overidden_user_id, CUSTOM_ATTR_NAME_ITEM_DATA['Item']['user_id']['S'])
+
+    async def test_batch_get(self):
+        """
+        Model.batch_get
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = SIMPLE_MODEL_TABLE_DATA
+            async with SimpleUserModel('foo') as item:
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = SIMPLE_BATCH_GET_ITEMS
+            item_keys = ['hash-{0}'.format(x) for x in range(10)]
+            async for item in SimpleUserModel.batch_get(item_keys):
+                self.assertIsNotNone(item)
+            params = {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'RequestItems': {
+                    'SimpleModel': {
+                        'Keys': [
+                            {'user_name': {'S': 'hash-9'}},
+                            {'user_name': {'S': 'hash-8'}},
+                            {'user_name': {'S': 'hash-7'}},
+                            {'user_name': {'S': 'hash-6'}},
+                            {'user_name': {'S': 'hash-5'}},
+                            {'user_name': {'S': 'hash-4'}},
+                            {'user_name': {'S': 'hash-3'}},
+                            {'user_name': {'S': 'hash-2'}},
+                            {'user_name': {'S': 'hash-1'}},
+                            {'user_name': {'S': 'hash-0'}}
+                        ]
+                    }
+                }
+            }
+            self.assertEqual(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = SIMPLE_BATCH_GET_ITEMS
+            item_keys = ['hash-{0}'.format(x) for x in range(10)]
+            async for item in SimpleUserModel.batch_get(item_keys, attributes_to_get=['numbers']):
+                self.assertIsNotNone(item)
+            params = {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'RequestItems': {
+                    'SimpleModel': {
+                        'Keys': [
+                            {'user_name': {'S': 'hash-9'}},
+                            {'user_name': {'S': 'hash-8'}},
+                            {'user_name': {'S': 'hash-7'}},
+                            {'user_name': {'S': 'hash-6'}},
+                            {'user_name': {'S': 'hash-5'}},
+                            {'user_name': {'S': 'hash-4'}},
+                            {'user_name': {'S': 'hash-3'}},
+                            {'user_name': {'S': 'hash-2'}},
+                            {'user_name': {'S': 'hash-1'}},
+                            {'user_name': {'S': 'hash-0'}}
+                        ],
+                        'ProjectionExpression': '#0',
+                        'ExpressionAttributeNames': {
+                            '#0': 'numbers'
+                        }
+                    }
+                }
+            }
+            self.assertEqual(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = SIMPLE_BATCH_GET_ITEMS
+            item_keys = ['hash-{0}'.format(x) for x in range(10)]
+            async for item in SimpleUserModel.batch_get(item_keys, consistent_read=True):
+                self.assertIsNotNone(item)
+            params = {
+                'ReturnConsumedCapacity': 'TOTAL',
+                'RequestItems': {
+                    'SimpleModel': {
+                        'Keys': [
+                            {'user_name': {'S': 'hash-9'}},
+                            {'user_name': {'S': 'hash-8'}},
+                            {'user_name': {'S': 'hash-7'}},
+                            {'user_name': {'S': 'hash-6'}},
+                            {'user_name': {'S': 'hash-5'}},
+                            {'user_name': {'S': 'hash-4'}},
+                            {'user_name': {'S': 'hash-3'}},
+                            {'user_name': {'S': 'hash-2'}},
+                            {'user_name': {'S': 'hash-1'}},
+                            {'user_name': {'S': 'hash-0'}}
+                        ],
+                        'ConsistentRead': True
+                    }
+                }
+            }
+            self.assertEqual(params, req.call_args[0][1])
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = MODEL_TABLE_DATA
+            async with UserModel('foo', 'bar') as item:
+                pass
+
+        with patch(PATCH_METHOD) as req:
+            item_keys = [('hash-{0}'.format(x), '{0}'.format(x)) for x in range(10)]
+            item_keys_copy = list(item_keys)
+            req.return_value = BATCH_GET_ITEMS
+            async for item in UserModel.batch_get(item_keys):
+                self.assertIsNotNone(item)
+            self.assertEqual(item_keys, item_keys_copy)
+            params = {
+                'RequestItems': {
+                    'UserModel': {
+                        'Keys': [
+                            {'user_name': {'S': 'hash-0'}, 'user_id': {'S': '0'}},
+                            {'user_name': {'S': 'hash-1'}, 'user_id': {'S': '1'}},
+                            {'user_name': {'S': 'hash-2'}, 'user_id': {'S': '2'}},
+                            {'user_name': {'S': 'hash-3'}, 'user_id': {'S': '3'}},
+                            {'user_name': {'S': 'hash-4'}, 'user_id': {'S': '4'}},
+                            {'user_name': {'S': 'hash-5'}, 'user_id': {'S': '5'}},
+                            {'user_name': {'S': 'hash-6'}, 'user_id': {'S': '6'}},
+                            {'user_name': {'S': 'hash-7'}, 'user_id': {'S': '7'}},
+                            {'user_name': {'S': 'hash-8'}, 'user_id': {'S': '8'}},
+                            {'user_name': {'S': 'hash-9'}, 'user_id': {'S': '9'}}
+                        ]
+                    }
+                }
+            }
+            args = req.call_args[0][1]
+            self.assertTrue('RequestItems' in params)
+            self.assertTrue('UserModel' in params['RequestItems'])
+            self.assertTrue('Keys' in params['RequestItems']['UserModel'])
+            self.assert_dict_lists_equal(
+                params['RequestItems']['UserModel']['Keys'],
+                args['RequestItems']['UserModel']['Keys'],
+            )
+
+        async def fake_batch_get(*batch_args):
+            kwargs = batch_args[1]
+            if REQUEST_ITEMS in kwargs:
+                batch_item = kwargs.get(REQUEST_ITEMS).get(UserModel.Meta.table_name).get(KEYS)[0]
+                batch_items = kwargs.get(REQUEST_ITEMS).get(UserModel.Meta.table_name).get(KEYS)[1:]
+                response = {
+                    UNPROCESSED_KEYS: {
+                        UserModel.Meta.table_name: {
+                            KEYS: batch_items
+                        }
+                    },
+                    RESPONSES: {
+                        UserModel.Meta.table_name: [batch_item]
+                    }
+                }
+                return response
+            return {}
+
+        batch_get_mock = CoroutineMock()
+        batch_get_mock.side_effect = fake_batch_get
+
+        with patch(PATCH_METHOD, new=batch_get_mock) as req:
+            item_keys = [('hash-{0}'.format(x), '{0}'.format(x)) for x in range(200)]
+            async for item in UserModel.batch_get(item_keys):
+                self.assertIsNotNone(item)
+
+    async def test_batch_write(self):
+        """
+        Model.batch_write
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = {}
+
+            async with UserModel.batch_write(auto_commit=False) as batch:
+                pass
+
+            async with UserModel.batch_write() as batch:
+                self.assertIsNone(await batch.commit())
+
+            with pytest.raises(ValueError):
+                async with UserModel.batch_write(auto_commit=False) as batch:
+                    items = [await UserModel('hash-{0}'.format(x), '{0}'.format(x)).__aenter__() for x in range(26)]
+                    for item in items:
+                        await batch.delete(item)
+                    with pytest.raises(ValueError):
+                        await batch.save(await UserModel('asdf', '1234').__aenter__())
+
+            async with UserModel.batch_write(auto_commit=False) as batch:
+                items = [await UserModel('hash-{0}'.format(x), '{0}'.format(x)).__aenter__() for x in range(25)]
+                for item in items:
+                    await batch.delete(item)
+                with pytest.raises(ValueError):
+                    await batch.save(UserModel('asdf', '1234').__aenter__())
+
+            async with UserModel.batch_write(auto_commit=False) as batch:
+                items = [await UserModel('hash-{0}'.format(x), '{0}'.format(x)).__aenter__() for x in range(25)]
+                for item in items:
+                    await batch.save(item)
+                with pytest.raises(ValueError):
+                    await batch.save(await UserModel('asdf', '1234').__aenter__())
+
+            async with UserModel.batch_write() as batch:
+                items = [await UserModel('hash-{0}'.format(x), '{0}'.format(x)).__aenter__() for x in range(30)]
+                for item in items:
+                    await batch.delete(item)
+
+            async with UserModel.batch_write() as batch:
+                items = [await UserModel('hash-{0}'.format(x), '{0}'.format(x)).__aenter__() for x in range(30)]
+                for item in items:
+                    await batch.save(item)
+
+    async def test_batch_write_with_unprocessed(self):
+        picture_blob = b'FFD8FFD8'
+
+        items = []
+        for idx in range(10):
+            items.append(await UserModel(
+                'daniel',
+                '{0}'.format(idx),
+                picture=picture_blob,
+            ).__aenter__())
+
+        unprocessed_items = []
+        for idx in range(5, 10):
+            unprocessed_items.append({
+                'PutRequest': {
+                    'Item': {
+                        'custom_username': {STRING_SHORT: 'daniel'},
+                        'user_id': {STRING_SHORT: '{0}'.format(idx)},
+                        'picture': {BINARY_SHORT: base64.b64encode(picture_blob).decode(DEFAULT_ENCODING)}
+                    }
+                }
+            })
+
+        with patch(PATCH_METHOD) as req:
+            req.side_effect = [
+                {
+                    UNPROCESSED_ITEMS: {
+                        UserModel.Meta.table_name: unprocessed_items[:2],
+                    }
+                },
+                {
+                    UNPROCESSED_ITEMS: {
+                        UserModel.Meta.table_name: unprocessed_items[2:],
+                    }
+                },
+                {}
+            ]
+
+            async with UserModel.batch_write() as batch:
+                for item in items:
+                    await batch.save(item)
+
+            self.assertEqual(len(req.mock_calls), 3)
+
+    @pytest.mark.skip
+    async def test_index_queries(self):
+        """
+        Model.Index.Query
+        """
+        with patch(PATCH_METHOD) as req:
+            req.return_value = CUSTOM_ATTR_NAME_INDEX_TABLE_DATA
+            await CustomAttrNameModel._get_meta_data()
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = INDEX_TABLE_DATA
+            await IndexedModel._get_connection().describe_table()
+
+        with patch(PATCH_METHOD) as req:
+            req.return_value = LOCAL_INDEX_TABLE_DATA
+            await LocalIndexedModel._get_meta_data()
+
+        self.assertEqual(IndexedModel.include_index.Meta.index_name, "non_key_idx")
+
+        queried = []
+        with patch(PATCH_METHOD) as req:
+            with pytest.raises(ValueError):
+                async for item in await IndexedModel.email_index.query('foo', user_id__between=['id-1', 'id-3']):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            with pytest.raises(ValueError):
+                async for item in await IndexedModel.email_index.query('foo', user_name__startswith='foo'):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            with pytest.raises(ValueError):
+                async for item in await IndexedModel.email_index.query('foo', name='foo'):
+                    queried.append(item._serialize().get(RANGE))
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items,
+                                'Table': INDEX_TABLE_DATA['Table']}
+            queried = []
+
+            async for item in await IndexedModel.email_index.query(
+                    'foo', IndexedModel.user_name.startswith('bar'), limit=2
+            ):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': 'begins_with (#1, :1)',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'custom_idx_name',
+                'TableName': 'IndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note this test is incorrect as 'user_name' is not the range key for email_index.
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+
+            async for item in await IndexedModel.email_index.query('foo', limit=2, user_name__begins_with='bar'):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'custom_idx_name',
+                'TableName': 'IndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+
+            async for item in await LocalIndexedModel.email_index.query(
+                    'foo',
+                    LocalIndexedModel.user_name.startswith('bar') & LocalIndexedModel.aliases.contains(1),
+                    limit=1):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': '(begins_with (#1, :1) AND contains (#2, :2))',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name',
+                    '#2': 'aliases'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    },
+                    ':2': {
+                        'S': '1'
+                    }
+                },
+                'IndexName': 'email_index',
+                'TableName': 'LocalIndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 1
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note this test is incorrect as 'user_name' is not the range key for email_index.
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                item['email'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+
+            async for item in await LocalIndexedModel.email_index.query(
+                    'foo',
+                    limit=1,
+                    user_name__begins_with='bar',
+                    aliases__contains=1):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'FilterExpression': 'contains (#2, :2)',
+                'ExpressionAttributeNames': {
+                    '#0': 'email',
+                    '#1': 'user_name',
+                    '#2': 'aliases'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    },
+                    ':2': {
+                        'S': '1'
+                    }
+                },
+                'IndexName': 'email_index',
+                'TableName': 'LocalIndexedModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 1
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+
+            async for item in await CustomAttrNameModel.uid_index.query(
+                    'foo',
+                    CustomAttrNameModel.overidden_user_name.startswith('bar'),
+                    limit=2):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '#0 = :0',
+                'FilterExpression': 'begins_with (#1, :1)',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+        # Note: this test is incorrect since uid_index has no range key
+        with patch(PATCH_METHOD) as req:
+            items = []
+            for idx in range(10):
+                item = copy.copy(GET_MODEL_ITEM_DATA.get(ITEM))
+                item['user_name'] = {STRING_SHORT: 'id-{0}'.format(idx)}
+                items.append(item)
+            req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
+            queried = []
+
+            async for item in await CustomAttrNameModel.uid_index.query(
+                    'foo', limit=2, overidden_user_name__begins_with='bar'
+            ):
+                queried.append(item._serialize())
+
+            params = {
+                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
+                'ExpressionAttributeNames': {
+                    '#0': 'user_id',
+                    '#1': 'user_name'
+                },
+                'ExpressionAttributeValues': {
+                    ':0': {
+                        'S': u'foo'
+                    },
+                    ':1': {
+                        'S': u'bar'
+                    }
+                },
+                'IndexName': 'uid_index',
+                'TableName': 'CustomAttrModel',
+                'ReturnConsumedCapacity': 'TOTAL',
+                'Limit': 2
+            }
+            self.assertEqual(req.call_args[0][1], params)
+
+    async def test_multiple_indices_share_non_key_attribute(self):
+        """
+        Models.Model
+        """
+        scope_args = {'count': 0}
+
+        async def fake_dynamodb(*args, **kwargs):
+            if scope_args['count'] == 0:
+                scope_args['count'] += 1
+                raise ClientError({'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}},
+                                  "DescribeTable")
+            return {}
+
+        fake_db = CoroutineMock()
+        fake_db.side_effect = fake_dynamodb
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            await IndexedModel.create_table(read_capacity_units=2, write_capacity_units=2)
+            params = {
+                'AttributeDefinitions': [
+                    {'AttributeName': 'email', 'AttributeType': 'S'},
+                    {'AttributeName': 'numbers', 'AttributeType': 'NS'},
+                    {'AttributeName': 'user_name', 'AttributeType': 'S'}
+                ]
+            }
+            args = req.call_args[0][1]
+            self.assert_dict_lists_equal(args['AttributeDefinitions'], params['AttributeDefinitions'])
+
+        scope_args['count'] = 0
+
+        with patch(PATCH_METHOD, new=fake_db) as req:
+            await GameModel.create_table()
+            params = {
+                'KeySchema': [
+                    {'KeyType': 'HASH', 'AttributeName': 'player_id'},
+                    {'KeyType': 'RANGE', 'AttributeName': 'created_time'}
+                ],
+                'LocalSecondaryIndexes': [
+                    {
+                        'KeySchema': [
+                            {'KeyType': 'HASH', 'AttributeName': 'player_id'},
+                            {'KeyType': 'RANGE', 'AttributeName': 'winner_id'}
+                        ],
+                        'IndexName': 'player_opponent_index',
+                        'Projection': {'ProjectionType': 'ALL'}
+                    }
+                ],
+                'TableName': 'GameModel',
+                'ProvisionedThroughput': {'WriteCapacityUnits': 1, 'ReadCapacityUnits': 1},
+                'GlobalSecondaryIndexes': [
+                    {
+                        'ProvisionedThroughput': {'WriteCapacityUnits': 1, 'ReadCapacityUnits': 1},
+                        'KeySchema': [
+                            {'KeyType': 'HASH', 'AttributeName': 'winner_id'},
+                            {'KeyType': 'RANGE', 'AttributeName': 'created_time'}
+                        ],
+                        'IndexName': 'opponent_time_index',
+                        'Projection': {'ProjectionType': 'ALL'}
+                    }
+                ],
+                'AttributeDefinitions': [
+                    {'AttributeName': 'created_time', 'AttributeType': 'S'},
+                    {'AttributeName': 'player_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'winner_id', 'AttributeType': 'S'}
+                ]
+            }
+            args = req.call_args[0][1]
+            for key in ['KeySchema', 'AttributeDefinitions', 'LocalSecondaryIndexes', 'GlobalSecondaryIndexes']:
+                self.assert_dict_lists_equal(args[key], params[key])
+
