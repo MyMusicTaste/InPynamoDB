@@ -1,10 +1,13 @@
 """
 InPynamoDB Indexes
 """
-from pynamodb.indexes import Index as PynamoDBIndex, IndexMeta
+from pynamodb.connection.util import pythonic
+from pynamodb.constants import ATTR_NAME, ATTR_TYPE, ATTR_TYPE_MAP, KEY_TYPE, KEY_SCHEMA, ATTR_DEFINITIONS
+from pynamodb.indexes import Index as PynamoDBIndex
+from pynamodb.types import HASH, RANGE
 
 
-class Index(PynamoDBIndex, metaclass=IndexMeta):
+class Index(PynamoDBIndex):
     """
     Base class for secondary indexes
     """
@@ -80,6 +83,33 @@ class Index(PynamoDBIndex, metaclass=IndexMeta):
             index_name=cls.Meta.index_name,
             **filters
         )
+
+    @classmethod
+    def _get_schema(cls):
+        """
+        Returns the schema for this index
+        """
+        attr_definitions = []
+        schema = []
+        for attr_name, attr_cls in cls._get_attributes().items():
+            attr_definitions.append({
+                pythonic(ATTR_NAME): attr_cls.attr_name,
+                pythonic(ATTR_TYPE): ATTR_TYPE_MAP[attr_cls.attr_type]
+            })
+            if attr_cls.is_hash_key:
+                schema.append({
+                    ATTR_NAME: attr_cls.attr_name,
+                    KEY_TYPE: HASH
+                })
+            elif attr_cls.is_range_key:
+                schema.append({
+                    ATTR_NAME: attr_cls.attr_name,
+                    KEY_TYPE: RANGE
+                })
+        return {
+            pythonic(KEY_SCHEMA): schema,
+            pythonic(ATTR_DEFINITIONS): attr_definitions
+        }
 
 
 class GlobalSecondaryIndex(Index):

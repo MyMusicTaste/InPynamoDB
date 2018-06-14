@@ -172,6 +172,7 @@ class TableConnection(object):
         """
         Performs the scan operation with rate limited
         """
+
         return self.connection.rate_limited_scan(
             self.table_name,
             filter_condition=filter_condition,

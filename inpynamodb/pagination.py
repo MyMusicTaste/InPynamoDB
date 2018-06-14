@@ -4,6 +4,19 @@ import asyncio
 from pynamodb.constants import (CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY, SCANNED_COUNT,
                                 CONSUMED_CAPACITY, TOTAL, CAPACITY_UNITS)
 
+import functools
+import sys
+
+if sys.version_info < (3, 5, 2):
+    def aiter_compat(func):
+        @functools.wraps(func)
+        async def wrapper(self):
+            return func(self)
+        return wrapper
+else:
+    def aiter_compat(func):
+        return func
+
 
 class RateLimiter(object):
     """
@@ -76,7 +89,7 @@ class PageIterator(object):
     http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.html#Query.Pagination
     http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.Pagination
     """
-    def __init__(self, operation, args, kwargs, rate_limit = None):
+    def __init__(self, operation, args, kwargs, rate_limit=None):
         self._operation = operation
         self._args = args
         self._kwargs = kwargs
@@ -87,6 +100,7 @@ class PageIterator(object):
         if rate_limit:
             self._rate_limiter = RateLimiter(rate_limit)
 
+    @aiter_compat
     async def __aiter__(self):
         return self
 
@@ -163,6 +177,7 @@ class ResultIterator(object):
         self._index = 0 if self._items else self._count
         self._total_count += self._count
 
+    @aiter_compat
     async def __aiter__(self):
         return self
 

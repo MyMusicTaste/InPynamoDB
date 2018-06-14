@@ -2,6 +2,9 @@
 Lowest level connection
 """
 import random
+import uuid
+import warnings
+from base64 import b64decode
 
 import aiohttp
 import asyncio
@@ -9,11 +12,13 @@ import logging
 import math
 import time
 
+from threading import local
 from aiobotocore import get_session
+from pynamodb.expressions.condition import Condition
+
+from inpynamodb.settings import get_settings_value
 from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.compat import NullHandler
-from pynamodb.connection import Connection
-# from pynamodb.connection.base import MetaTable
 from pynamodb.connection.util import pythonic
 from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE_TABLE, CREATE_TABLE, \
     RETURN_CONSUMED_CAPACITY, TOTAL, TABLE_NAME, CONSUMED_CAPACITY, CAPACITY_UNITS, SERVICE_NAME, TABLE_KEY, \
@@ -27,13 +32,15 @@ from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE
     PUT_REQUEST, DELETE_REQUEST, BATCH_WRITE_ITEM, CONSISTENT_READ, PROJECTION_EXPRESSION, KEYS, BATCH_GET_ITEM, \
     COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, SELECT_VALUES, \
     SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN, \
-    EXCLUSIVE_START_KEY, SHORT_ATTR_TYPES
+    EXCLUSIVE_START_KEY, SHORT_ATTR_TYPES, BINARY_SHORT, BINARY_SET_SHORT, DEFAULT_ENCODING, RESPONSES, \
+    UNPROCESSED_KEYS, UNPROCESSED_ITEMS, ATTRIBUTES, CONDITIONAL_OPERATORS, EXPECTED, RETURN_CONSUMED_CAPACITY_VALUES, \
+    RETURN_ITEM_COLL_METRICS, RETURN_VALUES_VALUES, RETURN_VALUES, RETURN_ITEM_COLL_METRICS_VALUES
 from pynamodb.exceptions import TableError, TableDoesNotExist, DeleteError, UpdateError, PutError, GetError, QueryError, \
     ScanError, VerboseClientError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
-from pynamodb.settings import get_settings_value
+
 from pynamodb.types import RANGE, HASH
 
 BOTOCORE_EXCEPTIONS = (BotoCoreError, ClientError)
@@ -201,10 +208,60 @@ class MetaTable(object):
             }
 
 
-class AsyncConnection(Connection):
+class AsyncConnection(object):
     """
     A higher level abstraction over aiobotocore
     """
+    def __init__(self, region=None, host=None, session_cls=None,
+                 request_timeout_seconds=None, max_retry_attempts=None, base_backoff_ms=None):
+        self._tables = {}
+        self.host = host
+        self._local = local()
+        self._requests_session = None
+        self._client = None
+        if region:
+            self.region = region
+        else:
+            self.region = get_settings_value('region')
+
+        if session_cls:
+            self.session_cls = session_cls
+        else:
+            self.session_cls = get_settings_value('session_cls')
+
+        if request_timeout_seconds is not None:
+            self._request_timeout_seconds = request_timeout_seconds
+        else:
+            self._request_timeout_seconds = get_settings_value('request_timeout_seconds')
+
+        if max_retry_attempts is not None:
+            self._max_retry_attempts_exception = max_retry_attempts
+        else:
+            self._max_retry_attempts_exception = get_settings_value('max_retry_attempts')
+
+        if base_backoff_ms is not None:
+            self._base_backoff_ms = base_backoff_ms
+        else:
+            self._base_backoff_ms = get_settings_value('base_backoff_ms')
+
+    def _log_debug(self, operation, kwargs):
+        """
+        Sends a debug message to the logger
+        """
+        log.debug("Calling %s with arguments %s", operation, kwargs)
+
+    def _log_debug_response(self, operation, response):
+        """
+        Sends a debug message to the logger about a response
+        """
+        log.debug("%s response: %s", operation, response)
+
+    def _log_error(self, operation, response):
+        """
+        Sends an error message to the logger
+        """
+        log.error("%s failed with status: %s, message: %s",
+                  operation, response.status_code,response.content)
 
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"
@@ -234,8 +291,8 @@ class AsyncConnection(Connection):
                 operation_kwargs.update(self.get_consumed_capacity_map(TOTAL))
         self._log_debug(operation_name, operation_kwargs)
 
-        # table_name = operation_kwargs.get(TABLE_NAME)
-        # req_uuid = uuid.uuid4()
+        table_name = operation_kwargs.get(TABLE_NAME)
+        req_uuid = uuid.uuid4()
 
         # self.send_pre_boto_callback(operation_name, req_uuid, table_name)
         data = await self._make_api_call(operation_name, operation_kwargs)
@@ -333,10 +390,45 @@ class AsyncConnection(Connection):
 
             return self._handle_binary_attributes(data)
 
+    @staticmethod
+    def _handle_binary_attributes(data):
+        """ Simulate botocore's binary attribute handling """
+        if ITEM in data:
+            for attr in data[ITEM].values():
+                _convert_binary(attr)
+        if ITEMS in data:
+            for item in data[ITEMS]:
+                for attr in item.values():
+                    _convert_binary(attr)
+        if RESPONSES in data:
+            for item_list in data[RESPONSES].values():
+                for item in item_list:
+                    for attr in item.values():
+                        _convert_binary(attr)
+        if LAST_EVALUATED_KEY in data:
+            for attr in data[LAST_EVALUATED_KEY].values():
+                _convert_binary(attr)
+        if UNPROCESSED_KEYS in data:
+            for table_data in data[UNPROCESSED_KEYS].values():
+                for item in table_data[KEYS]:
+                    for attr in item.values():
+                        _convert_binary(attr)
+        if UNPROCESSED_ITEMS in data:
+            for table_unprocessed_requests in data[UNPROCESSED_ITEMS].values():
+                for request in table_unprocessed_requests:
+                    for item_mapping in request.values():
+                        for item in item_mapping.values():
+                            for attr in item.values():
+                                _convert_binary(attr)
+        if ATTRIBUTES in data:
+            for attr in data[ATTRIBUTES].values():
+                _convert_binary(attr)
+        return data
+
     @property
     def session(self):
         """
-        Returns a valid botocore session
+        Returns a valid aiobotocore session
         """
         try:
             getattr(self._local, 'session')
@@ -344,6 +436,15 @@ class AsyncConnection(Connection):
             self._local.session = get_session()
 
         return self._local.session
+
+    @property
+    def requests_session(self):
+        """
+        Return a requests session to execute prepared requests using the same pool
+        """
+        if self._requests_session is None:
+            self._requests_session = self.session_cls()
+        return self._requests_session
 
     @property
     def client(self):
@@ -443,15 +544,6 @@ class AsyncConnection(Connection):
             raise TableError("Failed to create table: {0}".format(e), e)
         return data
 
-    async def get_exclusive_start_key_map(self, table_name, exclusive_start_key):
-        """
-        Builds the exclusive start key attribute map
-        """
-        tbl = await self.get_meta_table(table_name)
-        if tbl is None:
-            raise TableError("No such table {0}".format(table_name))
-        return tbl.get_exclusive_start_key_map(exclusive_start_key)
-
     async def delete_table(self, table_name):
         """
         Performs the DeleteTable operation
@@ -532,6 +624,23 @@ class AsyncConnection(Connection):
 
         raise TableDoesNotExist(table_name)
 
+    def get_conditional_operator(self, operator):
+        """
+        Returns a dictionary containing the correct conditional operator,
+        validating it first.
+        """
+        operator = operator.upper()
+        if operator not in CONDITIONAL_OPERATORS:
+            raise ValueError(
+                "The {0} must be one of {1}".format(
+                    CONDITIONAL_OPERATOR,
+                    CONDITIONAL_OPERATORS
+                )
+            )
+        return {
+            CONDITIONAL_OPERATOR: operator
+        }
+
     async def get_item_attribute_map(self, table_name, attributes, item_key=ITEM, pythonic_key=True):
         """
         Builds up a dynamodb compatible AttributeValue map
@@ -543,6 +652,52 @@ class AsyncConnection(Connection):
             attributes,
             item_key=item_key,
             pythonic_key=pythonic_key)
+
+    def get_expected_map(self, table_name, expected):
+        """
+        Builds the expected map that is common to several operations
+        """
+        kwargs = {EXPECTED: {}}
+        for key, condition in expected.items():
+            if EXISTS in condition:
+                kwargs[EXPECTED][key] = {
+                    EXISTS: condition.get(EXISTS)
+                }
+            elif VALUE in condition:
+                kwargs[EXPECTED][key] = {
+                    VALUE: {
+                        self.get_attribute_type(table_name, key): condition.get(VALUE)
+                    }
+                }
+            elif COMPARISON_OPERATOR in condition:
+                kwargs[EXPECTED][key] = {
+                    COMPARISON_OPERATOR: condition.get(COMPARISON_OPERATOR),
+                }
+                values = []
+                for value in condition.get(ATTR_VALUE_LIST, []):
+                    attr_type = self.get_attribute_type(table_name, key, value)
+                    values.append({attr_type: self.parse_attribute(value)})
+                if condition.get(COMPARISON_OPERATOR) not in [NULL, NOT_NULL]:
+                    kwargs[EXPECTED][key][ATTR_VALUE_LIST] = values
+        return kwargs
+
+    def parse_attribute(self, attribute, return_type=False):
+        """
+        Returns the attribute value, where the attribute can be
+        a raw attribute value, or a dictionary containing the type:
+        {'S': 'String value'}
+        """
+        if isinstance(attribute, dict):
+            for key in SHORT_ATTR_TYPES:
+                if key in attribute:
+                    if return_type:
+                        return key, attribute.get(key)
+                    return attribute.get(key)
+            raise ValueError("Invalid attribute supplied: {0}".format(attribute))
+        else:
+            if return_type:
+                return None, attribute
+            return attribute
 
     async def get_attribute_type(self, table_name, attribute_name, value=None):
         """
@@ -585,6 +740,45 @@ class AsyncConnection(Connection):
             if len(attr_value_list):
                 kwargs[QUERY_FILTER][key][ATTR_VALUE_LIST] = attr_value_list
         return kwargs
+
+    def get_consumed_capacity_map(self, return_consumed_capacity):
+        """
+        Builds the consumed capacity map that is common to several operations
+        """
+        if return_consumed_capacity.upper() not in RETURN_CONSUMED_CAPACITY_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_CONSUMED_CAPACITY_VALUES))
+        return {
+            RETURN_CONSUMED_CAPACITY: str(return_consumed_capacity).upper()
+        }
+
+    def get_return_values_map(self, return_values):
+        """
+        Builds the return values map that is common to several operations
+        """
+        if return_values.upper() not in RETURN_VALUES_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_VALUES, RETURN_VALUES_VALUES))
+        return {
+            RETURN_VALUES: str(return_values).upper()
+        }
+
+    def get_item_collection_map(self, return_item_collection_metrics):
+        """
+        Builds the item collection map
+        """
+        if return_item_collection_metrics.upper() not in RETURN_ITEM_COLL_METRICS_VALUES:
+            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_ITEM_COLL_METRICS_VALUES))
+        return {
+            RETURN_ITEM_COLL_METRICS: str(return_item_collection_metrics).upper()
+        }
+
+    async def get_exclusive_start_key_map(self, table_name, exclusive_start_key):
+        """
+        Builds the exclusive start key attribute map
+        """
+        tbl = await self.get_meta_table(table_name)
+        if tbl is None:
+            raise TableError("No such table {0}".format(table_name))
+        return tbl.get_exclusive_start_key_map(exclusive_start_key)
 
     async def delete_item(self,
                           table_name,
@@ -835,6 +1029,30 @@ class AsyncConnection(Connection):
         except BOTOCORE_EXCEPTIONS as e:
             raise GetError("Failed to batch get items: {0}".format(e), e)
 
+    async def get_item(self,
+                       table_name,
+                       hash_key,
+                       range_key=None,
+                       consistent_read=False,
+                       attributes_to_get=None):
+        """
+        Performs the GetItem operation and returns the result
+        """
+        operation_kwargs = {}
+        name_placeholders = {}
+        if attributes_to_get is not None:
+            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
+            operation_kwargs[PROJECTION_EXPRESSION] = projection_expression
+        if name_placeholders:
+            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
+        operation_kwargs[CONSISTENT_READ] = consistent_read
+        operation_kwargs[TABLE_NAME] = table_name
+        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key))
+        try:
+            return await self.dispatch(GET_ITEM, operation_kwargs)
+        except BOTOCORE_EXCEPTIONS as e:
+            raise GetError("Failed to get item: {0}".format(e), e)
+
     async def rate_limited_scan(self,
                                 table_name,
                                 filter_condition=None,
@@ -986,30 +1204,6 @@ class AsyncConnection(Connection):
                 asyncio.sleep(min(math.ceil(time_to_sleep), max_sleep_between_retry))
                 # Reset the latest_scan_consumed_capacity, as no scan operation was performed.
                 latest_scan_consumed_capacity = 0
-
-    async def get_item(self,
-                       table_name,
-                       hash_key,
-                       range_key=None,
-                       consistent_read=False,
-                       attributes_to_get=None):
-        """
-        Performs the GetItem operation and returns the result
-        """
-        operation_kwargs = {}
-        name_placeholders = {}
-        if attributes_to_get is not None:
-            projection_expression = create_projection_expression(attributes_to_get, name_placeholders)
-            operation_kwargs[PROJECTION_EXPRESSION] = projection_expression
-        if name_placeholders:
-            operation_kwargs[EXPRESSION_ATTRIBUTE_NAMES] = self._reverse_dict(name_placeholders)
-        operation_kwargs[CONSISTENT_READ] = consistent_read
-        operation_kwargs[TABLE_NAME] = table_name
-        operation_kwargs.update(await self.get_identifier_map(table_name, hash_key, range_key))
-        try:
-            return await self.dispatch(GET_ITEM, operation_kwargs)
-        except BOTOCORE_EXCEPTIONS as e:
-            raise GetError("Failed to get item: {0}".format(e), e)
 
     async def scan(self,
                    table_name,
@@ -1245,3 +1439,34 @@ class AsyncConnection(Connection):
             for value in values
         ]
         return getattr(Path([attribute_name]), operator)(*values)
+
+    def _check_actions(self, actions, attribute_updates):
+        if actions is not None:
+            if attribute_updates is not None:
+                raise ValueError("Legacy attribute updates cannot be used with update actions")
+        else:
+            if attribute_updates is not None:
+                warnings.warn("Legacy attribute updates are deprecated in favor of update actions")
+
+    def _check_condition(self, name, condition, expected_or_filter, conditional_operator):
+        if condition is not None:
+            if not isinstance(condition, Condition):
+                raise ValueError("'{0}' must be an instance of Condition".format(name))
+            if expected_or_filter or conditional_operator is not None:
+                raise ValueError("Legacy conditional parameters cannot be used with condition expressions")
+        else:
+            if expected_or_filter or conditional_operator is not None:
+                warnings.warn("Legacy conditional parameters are deprecated in favor of condition expressions")
+
+    @staticmethod
+    def _reverse_dict(d):
+        return dict((v, k) for k, v in d.items())
+
+
+def _convert_binary(attr):
+    if BINARY_SHORT in attr:
+        attr[BINARY_SHORT] = b64decode(attr[BINARY_SHORT].encode(DEFAULT_ENCODING))
+    elif BINARY_SET_SHORT in attr:
+        value = attr[BINARY_SET_SHORT]
+        if value and len(value):
+            attr[BINARY_SET_SHORT] = set(b64decode(v.encode(DEFAULT_ENCODING)) for v in value)
