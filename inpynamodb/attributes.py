@@ -267,6 +267,36 @@ class AttributeContainer(object, metaclass=AttributeContainerMeta):
                 raise ValueError("Attribute {0} specified does not exist".format(attr_name))
             setattr(self, attr_name, attr_value)
 
+    def as_dict(self, attributes_to_get=None, include_none=True):
+        result = {}
+
+        if include_none:
+            if attributes_to_get is None:
+                for k in self._get_attributes().keys():
+                    attr_value = self.__getattribute__(k)
+                    if isinstance(attr_value, MapAttribute):
+                        result[k] = attr_value.as_dict(include_none=include_none)
+                    else:
+                        result[k] = attr_value
+            else:
+                for k, v in self._get_attributes().items():
+                    if k in attributes_to_get:
+                        attr_value = self.__getattribute__(k)
+                        if isinstance(v, MapAttribute):
+                            result[k] = attr_value.as_dict(include_none=include_none)
+                        else:
+                            result[k] = v
+
+        if attributes_to_get is None:
+            for key, value in self.attribute_values.items():
+                result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+        else:
+            for key, value in self.attribute_values.items():
+                if key in attributes_to_get:
+                    result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+
+        return result
+
     def __eq__(self, other):
         # This is required for python 2 support so that MapAttribute can call this method.
         return self is other
