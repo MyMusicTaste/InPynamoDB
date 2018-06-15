@@ -422,10 +422,8 @@ class JSONAttribute(Attribute):
         if value is None:
             return None
         encoded = json.dumps(value)
-        try:
-            return unicode(encoded)
-        except NameError:
-            return encoded
+
+        return encoded
 
     def deserialize(self, value):
         """

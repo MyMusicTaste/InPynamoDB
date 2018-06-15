@@ -7,7 +7,6 @@ import copy
 import json
 import warnings
 
-from inpynamodb.attributes import Attribute
 from pynamodb.compat import getmembers_issubclass
 from pynamodb.connection.base import log
 from pynamodb.connection.util import pythonic
@@ -18,7 +17,7 @@ from pynamodb.constants import BATCH_GET_PAGE_LIMIT, RESPONSES, UNPROCESSED_KEYS
     BATCH_WRITE_PAGE_LIMIT, PUT, DELETE, ATTRIBUTES, UNPROCESSED_ITEMS, PUT_REQUEST, DELETE_REQUEST, RETURN_VALUES, \
     ALL_NEW, ATTR_UPDATES, RANGE_KEY, UPDATE_FILTER_OPERATOR_MAP, ACTION, VALUE, ATTR_TYPE_MAP, ITEM_COUNT, COUNT, \
     SCAN_OPERATOR_MAP, KEY, INDEX_NAME, KEY_SCHEMA, PROJECTION, PROJECTION_TYPE, PROVISIONED_THROUGHPUT, \
-    NON_KEY_ATTRIBUTES
+    NON_KEY_ATTRIBUTES, ATTR_TYPE, KEY_TYPE
 from pynamodb.exceptions import DoesNotExist, TableError, TableDoesNotExist
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta, ModelContextManager as PynamoDBModelContextManager
 from pynamodb.types import HASH, RANGE
@@ -134,55 +133,6 @@ class BatchWrite(ModelContextManager):
             unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
 
 
-class MetaModel(AttributeContainerMeta):
-    """
-    Model meta class
-
-    This class is just here so that index queries have nice syntax.
-    Model.index.query()
-    """
-
-    def __init__(cls, name, bases, attrs):
-        super(MetaModel, cls).__init__(name, bases, attrs)
-        if isinstance(attrs, dict):
-            for attr_name, attr_obj in attrs.items():
-                if attr_name == META_CLASS_NAME:
-                    if not hasattr(attr_obj, REGION):
-                        setattr(attr_obj, REGION, get_settings_value('region'))
-                    if not hasattr(attr_obj, HOST):
-                        setattr(attr_obj, HOST, get_settings_value('host'))
-                    if not hasattr(attr_obj, 'session_cls'):
-                        setattr(attr_obj, 'session_cls', get_settings_value('session_cls'))
-                    if not hasattr(attr_obj, 'request_timeout_seconds'):
-                        setattr(attr_obj, 'request_timeout_seconds', get_settings_value('request_timeout_seconds'))
-                    if not hasattr(attr_obj, 'base_backoff_ms'):
-                        setattr(attr_obj, 'base_backoff_ms', get_settings_value('base_backoff_ms'))
-                    if not hasattr(attr_obj, 'max_retry_attempts'):
-                        setattr(attr_obj, 'max_retry_attempts', get_settings_value('max_retry_attempts'))
-                    if not hasattr(attr_obj, 'aws_access_key_id'):
-                        setattr(attr_obj, 'aws_access_key_id', None)
-                    if not hasattr(attr_obj, 'aws_secret_access_key'):
-                        setattr(attr_obj, 'aws_secret_access_key', None)
-                elif issubclass(attr_obj.__class__, (Index,)):
-                    attr_obj.Meta.model = cls
-                    if not hasattr(attr_obj.Meta, "index_name"):
-                        attr_obj.Meta.index_name = attr_name
-                elif issubclass(attr_obj.__class__, (Attribute,)):
-                    if attr_obj.attr_name is None:
-                        attr_obj.attr_name = attr_name
-
-            if META_CLASS_NAME not in attrs:
-                setattr(cls, META_CLASS_NAME, DefaultMeta)
-
-            # create a custom Model.DoesNotExist derived from pynamodb.exceptions.DoesNotExist,
-            # so that "except Model.DoesNotExist:" would not catch other models' exceptions
-            if 'DoesNotExist' not in attrs:
-                exception_attrs = {'__module__': attrs.get('__module__')}
-                if hasattr(cls, '__qualname__'):  # On Python 3, Model.DoesNotExist
-                    exception_attrs['__qualname__'] = '{}.{}'.format(cls.__qualname__, 'DoesNotExist')
-                cls.DoesNotExist = type('DoesNotExist', (DoesNotExist,), exception_attrs)
-
-
 class Model(PynamoDBModel):
     """
     Defines a `InPynamoDB` Model
@@ -200,12 +150,6 @@ class Model(PynamoDBModel):
     DoesNotExist = DoesNotExist
 
     def __init__(self, hash_key=None, range_key=None, save_on_exit=False, **attributes):
-        self._hash_key = hash_key
-        self._range_key = range_key
-        self._save_on_exit = save_on_exit
-        self._attributes = attributes
-
-    async def __aenter__(self):
         """
         :param hash_key: Required. The hash key for this object.
         :param range_key: Only required if the table has a range key attribute.
@@ -213,6 +157,12 @@ class Model(PynamoDBModel):
         :param attrs: A dictionary of attributes to set on this object.
         """
 
+        self._hash_key = hash_key
+        self._range_key = range_key
+        self._save_on_exit = save_on_exit
+        self._attributes = attributes
+
+    async def __aenter__(self):
         if self._hash_key is not None:
             self._attributes[self._dynamo_to_python_attr((await self._get_meta_data()).hash_keyname)] = self._hash_key
         if self._range_key is not None:
@@ -253,7 +203,7 @@ class Model(PynamoDBModel):
                         attributes_to_get=attributes_to_get
                     )
                     for batch_item in page:
-                        yield cls.from_raw_data(batch_item)
+                        yield (await cls.from_raw_data(batch_item))
                     if unprocessed_keys:
                         keys_to_get = unprocessed_keys
                     else:
@@ -566,9 +516,9 @@ class Model(PynamoDBModel):
                 await batch.save(item)
 
     @classmethod
-    def load(cls, filename):
+    async def load(cls, filename):
         with open(filename, 'r') as inf:
-            cls.loads(inf.read())
+            await cls.loads(inf.read())
 
     # Private API below
     @classmethod
@@ -593,6 +543,71 @@ class Model(PynamoDBModel):
         async with cls() as item:
             item._deserialize(attributes)
             return item
+
+
+    @classmethod
+    def _get_schema(cls):
+        """
+        Returns the schema for this table
+        """
+        schema = {
+            pythonic(ATTR_DEFINITIONS): [],
+            pythonic(KEY_SCHEMA): []
+        }
+        for attr_name, attr_cls in cls.get_attributes().items():
+            if attr_cls.is_hash_key or attr_cls.is_range_key:
+                schema[pythonic(ATTR_DEFINITIONS)].append({
+                    pythonic(ATTR_NAME): attr_cls.attr_name,
+                    pythonic(ATTR_TYPE): ATTR_TYPE_MAP[attr_cls.attr_type]
+                })
+            if attr_cls.is_hash_key:
+                schema[pythonic(KEY_SCHEMA)].append({
+                    pythonic(KEY_TYPE): HASH,
+                    pythonic(ATTR_NAME): attr_cls.attr_name
+                })
+            elif attr_cls.is_range_key:
+                schema[pythonic(KEY_SCHEMA)].append({
+                    pythonic(KEY_TYPE): RANGE,
+                    pythonic(ATTR_NAME): attr_cls.attr_name
+                })
+        return schema
+
+    @classmethod
+    def _get_indexes(cls):
+        """
+        Returns a list of the secondary indexes
+        """
+        if cls._indexes is None:
+            cls._indexes = {
+                pythonic(GLOBAL_SECONDARY_INDEXES): [],
+                pythonic(LOCAL_SECONDARY_INDEXES): [],
+                pythonic(ATTR_DEFINITIONS): []
+            }
+            cls._index_classes = {}
+            for name, index in getmembers_issubclass(cls, Index):
+                cls._index_classes[index.Meta.index_name] = index
+                schema = index._get_schema()
+                idx = {
+                    pythonic(INDEX_NAME): index.Meta.index_name,
+                    pythonic(KEY_SCHEMA): schema.get(pythonic(KEY_SCHEMA)),
+                    pythonic(PROJECTION): {
+                        PROJECTION_TYPE: index.Meta.projection.projection_type,
+                    },
+
+                }
+                if issubclass(index.__class__, GlobalSecondaryIndex):
+                    idx[pythonic(PROVISIONED_THROUGHPUT)] = {
+                        READ_CAPACITY_UNITS: index.Meta.read_capacity_units,
+                        WRITE_CAPACITY_UNITS: index.Meta.write_capacity_units
+                    }
+                cls._indexes[pythonic(ATTR_DEFINITIONS)].extend(schema.get(pythonic(ATTR_DEFINITIONS)))
+                if index.Meta.projection.non_key_attributes:
+                    idx[pythonic(PROJECTION)][NON_KEY_ATTRIBUTES] = index.Meta.projection.non_key_attributes
+                if issubclass(index.__class__, GlobalSecondaryIndex):
+                    cls._indexes[pythonic(GLOBAL_SECONDARY_INDEXES)].append(idx)
+                else:
+                    cls._indexes[pythonic(LOCAL_SECONDARY_INDEXES)].append(idx)
+        return cls._indexes
 
     async def update_item(self, attribute, value=None, action=None, condition=None, conditional_operator=None,
                           **expected_values):
@@ -732,19 +747,15 @@ class Model(PynamoDBModel):
         """
         if not hasattr(cls, "Meta"):
             raise AttributeError(
-                'As of v1.0 InPynamoDB Models require a `Meta` class.\n'
-                'Model: {0}.{1}\n'
-                'See https://pynamodb.readthedocs.io/en/latest/release_notes.html\n'.format(
-                    cls.__module__, cls.__name__,
-                ),
+                f'As of v1.0 InPynamoDB Models require a `Meta` class.\n'
+                f'Model: {cls.__module__}.{cls.__name__}\n'
+                f'See https://pynamodb.readthedocs.io/en/latest/release_notes.html\n'
             )
         elif not hasattr(cls.Meta, "table_name") or cls.Meta.table_name is None:
             raise AttributeError(
-                'As of v1.0 InPyanmoDB Models must have a table_name\n'
-                'Model: {0}.{1}\n'
-                'See https://pynamodb.readthedocs.io/en/latest/release_notes.html'.format(
-                    cls.__module__, cls.__name__,
-                ),
+                f'As of v1.0 InPyanmoDB Models must have a table_name\n'
+                f'Model: {cls.__module__}.{cls.__name__}\n'
+                f'See https://pynamodb.readthedocs.io/en/latest/release_notes.html'
             )
         if cls._connection is None:
             cls._connection = TableConnection(cls.Meta.table_name,
@@ -970,43 +981,6 @@ class Model(PynamoDBModel):
             limit=limit,
             rate_limit=rate_limit
         )
-
-    @classmethod
-    def _get_indexes(cls):
-        """
-        Returns a list of the secondary indexes
-        """
-        if cls._indexes is None:
-            cls._indexes = {
-                pythonic(GLOBAL_SECONDARY_INDEXES): [],
-                pythonic(LOCAL_SECONDARY_INDEXES): [],
-                pythonic(ATTR_DEFINITIONS): []
-            }
-            cls._index_classes = {}
-            for name, index in getmembers_issubclass(cls, Index):
-                cls._index_classes[index.Meta.index_name] = index
-                schema = index._get_schema()
-                idx = {
-                    pythonic(INDEX_NAME): index.Meta.index_name,
-                    pythonic(KEY_SCHEMA): schema.get(pythonic(KEY_SCHEMA)),
-                    pythonic(PROJECTION): {
-                        PROJECTION_TYPE: index.Meta.projection.projection_type,
-                    },
-
-                }
-                if issubclass(index.__class__, GlobalSecondaryIndex):
-                    idx[pythonic(PROVISIONED_THROUGHPUT)] = {
-                        READ_CAPACITY_UNITS: index.Meta.read_capacity_units,
-                        WRITE_CAPACITY_UNITS: index.Meta.write_capacity_units
-                    }
-                cls._indexes[pythonic(ATTR_DEFINITIONS)].extend(schema.get(pythonic(ATTR_DEFINITIONS)))
-                if index.Meta.projection.non_key_attributes:
-                    idx[pythonic(PROJECTION)][NON_KEY_ATTRIBUTES] = index.Meta.projection.non_key_attributes
-                if issubclass(index.__class__, GlobalSecondaryIndex):
-                    cls._indexes[pythonic(GLOBAL_SECONDARY_INDEXES)].append(idx)
-                else:
-                    cls._indexes[pythonic(LOCAL_SECONDARY_INDEXES)].append(idx)
-        return cls._indexes
 
     @classmethod
     async def _range_key_attribute(cls):

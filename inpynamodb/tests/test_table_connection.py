@@ -1,6 +1,8 @@
 """
 Test suite for the table class
 """
+import pytest
+
 from inpynamodb.connection import TableConnection
 from inpynamodb.tests.response import HttpOK
 from asynctest import TestCase, patch
@@ -47,7 +49,9 @@ class ConnectionTestCase(TestCase):
             'read_capacity_units': 1,
             'write_capacity_units': 1,
         }
-        self.assertAsyncRaises(ValueError, conn.create_table(**kwargs))
+        with pytest.raises(ValueError):
+            await conn.create_table(**kwargs)
+
         kwargs['attribute_definitions'] = [
             {
                 'attribute_name': 'key1',
@@ -58,7 +62,10 @@ class ConnectionTestCase(TestCase):
                 'attribute_type': 'S'
             }
         ]
-        self.assertAsyncRaises(ValueError, conn.create_table(**kwargs))
+
+        with pytest.raises(ValueError):
+            await conn.create_table(**kwargs)
+
         kwargs['key_schema'] = [
             {
                 'attribute_name': 'key1',

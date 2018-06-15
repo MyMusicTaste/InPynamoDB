@@ -14,6 +14,7 @@ import time
 
 from threading import local
 from aiobotocore import get_session
+from pynamodb.connection.base import MetaTable, Connection
 from pynamodb.expressions.condition import Condition
 
 from inpynamodb.settings import get_settings_value
@@ -49,220 +50,10 @@ log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
 
 
-class MetaTable(object):
-    """
-    A pythonic wrapper around table metadata
-    """
-
-    def __init__(self, data):
-        self.data = data or {}
-        self._range_keyname = None
-        self._hash_keyname = None
-
-    def __repr__(self):
-        if self.data:
-            return f"MetaTable<{self.data.get(TABLE_NAME)}>"
-
-    @property
-    def range_keyname(self):
-        """
-        Returns the name of this table's range key
-        """
-        if self._range_keyname is None:
-            for attr in self.data.get(KEY_SCHEMA):
-                if attr.get(KEY_TYPE) == RANGE:
-                    self._range_keyname = attr.get(ATTR_NAME)
-        return self._range_keyname
-
-    @property
-    def hash_keyname(self):
-        """
-        Returns the name of this table's hash key
-        """
-        if self._hash_keyname is None:
-            for attr in self.data.get(KEY_SCHEMA):
-                if attr.get(KEY_TYPE) == HASH:
-                    self._hash_keyname = attr.get(ATTR_NAME)
-                    break
-        return self._hash_keyname
-
-    def get_key_names(self, index_name=None):
-        """
-        Returns the names of the primary key attributes and index key attributes (if index_name is specified)
-        """
-        key_names = [self.hash_keyname]
-        if self.range_keyname:
-            key_names.append(self.range_keyname)
-        if index_name is not None:
-            index_hash_keyname = self.get_index_hash_keyname(index_name)
-            if index_hash_keyname not in key_names:
-                key_names.append(index_hash_keyname)
-            index_range_keyname = self.get_index_range_keyname(index_name)
-            if index_range_keyname is not None and index_range_keyname not in key_names:
-                key_names.append(index_range_keyname)
-        return key_names
-
-    def get_index_hash_keyname(self, index_name):
-        """
-        Returns the name of the hash key for a given index
-        """
-        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
-        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
-        indexes = []
-        if local_indexes:
-            indexes += local_indexes
-        if global_indexes:
-            indexes += global_indexes
-        for index in indexes:
-            if index.get(INDEX_NAME) == index_name:
-                for schema_key in index.get(KEY_SCHEMA):
-                    if schema_key.get(KEY_TYPE) == HASH:
-                        return schema_key.get(ATTR_NAME)
-
-    def get_index_range_keyname(self, index_name):
-        """
-        Returns the name of the hash key for a given index
-        """
-        global_indexes = self.data.get(GLOBAL_SECONDARY_INDEXES)
-        local_indexes = self.data.get(LOCAL_SECONDARY_INDEXES)
-        indexes = []
-        if local_indexes:
-            indexes += local_indexes
-        if global_indexes:
-            indexes += global_indexes
-        for index in indexes:
-            if index.get(INDEX_NAME) == index_name:
-                for schema_key in index.get(KEY_SCHEMA):
-                    if schema_key.get(KEY_TYPE) == RANGE:
-                        return schema_key.get(ATTR_NAME)
-        return None
-
-    def get_item_attribute_map(self, attributes, item_key=ITEM, pythonic_key=True):
-        """
-        Builds up a dynamodb compatible AttributeValue map
-        """
-        if pythonic_key:
-            item_key = item_key
-        attr_map = {
-            item_key: {}
-        }
-        for key, value in attributes.items():
-            # In this case, the user provided a mapping
-            # {'key': {'S': 'value'}}
-            if isinstance(value, dict):
-                attr_map[item_key][key] = value
-            else:
-                attr_map[item_key][key] = {
-                    self.get_attribute_type(key): value
-                }
-        return attr_map
-
-    def get_attribute_type(self, attribute_name, value=None):
-        """
-        Returns the proper attribute type for a given attribute name
-        """
-        for attr in self.data.get(ATTR_DEFINITIONS):
-            if attr.get(ATTR_NAME) == attribute_name:
-                return attr.get(ATTR_TYPE)
-        if value is not None and isinstance(value, dict):
-            for key in SHORT_ATTR_TYPES:
-                if key in value:
-                    return key
-        attr_names = [attr.get(ATTR_NAME) for attr in self.data.get(ATTR_DEFINITIONS)]
-        raise ValueError("No attribute {0} in {1}".format(attribute_name, attr_names))
-
-    def get_identifier_map(self, hash_key, range_key=None, key=KEY):
-        """
-        Builds the identifier map that is common to several operations
-        """
-        kwargs = {
-            key: {
-                self.hash_keyname: {
-                    self.get_attribute_type(self.hash_keyname): hash_key
-                }
-            }
-        }
-        if range_key is not None:
-            kwargs[key][self.range_keyname] = {
-                self.get_attribute_type(self.range_keyname): range_key
-            }
-        return kwargs
-
-    def get_exclusive_start_key_map(self, exclusive_start_key):
-        """
-        Builds the exclusive start key attribute map
-        """
-        if isinstance(exclusive_start_key, dict) and self.hash_keyname in exclusive_start_key:
-            # This is useful when paginating results, as the LastEvaluatedKey returned is already
-            # structured properly
-            return {
-                EXCLUSIVE_START_KEY: exclusive_start_key
-            }
-        else:
-            return {
-                EXCLUSIVE_START_KEY: {
-                    self.hash_keyname: {
-                        self.get_attribute_type(self.hash_keyname): exclusive_start_key
-                    }
-                }
-            }
-
-
-class AsyncConnection(object):
+class AsyncConnection(Connection):
     """
     A higher level abstraction over aiobotocore
     """
-    def __init__(self, region=None, host=None, session_cls=None,
-                 request_timeout_seconds=None, max_retry_attempts=None, base_backoff_ms=None):
-        self._tables = {}
-        self.host = host
-        self._local = local()
-        self._requests_session = None
-        self._client = None
-        if region:
-            self.region = region
-        else:
-            self.region = get_settings_value('region')
-
-        if session_cls:
-            self.session_cls = session_cls
-        else:
-            self.session_cls = get_settings_value('session_cls')
-
-        if request_timeout_seconds is not None:
-            self._request_timeout_seconds = request_timeout_seconds
-        else:
-            self._request_timeout_seconds = get_settings_value('request_timeout_seconds')
-
-        if max_retry_attempts is not None:
-            self._max_retry_attempts_exception = max_retry_attempts
-        else:
-            self._max_retry_attempts_exception = get_settings_value('max_retry_attempts')
-
-        if base_backoff_ms is not None:
-            self._base_backoff_ms = base_backoff_ms
-        else:
-            self._base_backoff_ms = get_settings_value('base_backoff_ms')
-
-    def _log_debug(self, operation, kwargs):
-        """
-        Sends a debug message to the logger
-        """
-        log.debug("Calling %s with arguments %s", operation, kwargs)
-
-    def _log_debug_response(self, operation, response):
-        """
-        Sends a debug message to the logger about a response
-        """
-        log.debug("%s response: %s", operation, response)
-
-    def _log_error(self, operation, response):
-        """
-        Sends an error message to the logger
-        """
-        log.error("%s failed with status: %s, message: %s",
-                  operation, response.status_code,response.content)
-
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"
 
@@ -389,41 +180,6 @@ class AsyncConnection(object):
                         continue
 
             return self._handle_binary_attributes(data)
-
-    @staticmethod
-    def _handle_binary_attributes(data):
-        """ Simulate botocore's binary attribute handling """
-        if ITEM in data:
-            for attr in data[ITEM].values():
-                _convert_binary(attr)
-        if ITEMS in data:
-            for item in data[ITEMS]:
-                for attr in item.values():
-                    _convert_binary(attr)
-        if RESPONSES in data:
-            for item_list in data[RESPONSES].values():
-                for item in item_list:
-                    for attr in item.values():
-                        _convert_binary(attr)
-        if LAST_EVALUATED_KEY in data:
-            for attr in data[LAST_EVALUATED_KEY].values():
-                _convert_binary(attr)
-        if UNPROCESSED_KEYS in data:
-            for table_data in data[UNPROCESSED_KEYS].values():
-                for item in table_data[KEYS]:
-                    for attr in item.values():
-                        _convert_binary(attr)
-        if UNPROCESSED_ITEMS in data:
-            for table_unprocessed_requests in data[UNPROCESSED_ITEMS].values():
-                for request in table_unprocessed_requests:
-                    for item_mapping in request.values():
-                        for item in item_mapping.values():
-                            for attr in item.values():
-                                _convert_binary(attr)
-        if ATTRIBUTES in data:
-            for attr in data[ATTRIBUTES].values():
-                _convert_binary(attr)
-        return data
 
     @property
     def session(self):
@@ -624,23 +380,6 @@ class AsyncConnection(object):
 
         raise TableDoesNotExist(table_name)
 
-    def get_conditional_operator(self, operator):
-        """
-        Returns a dictionary containing the correct conditional operator,
-        validating it first.
-        """
-        operator = operator.upper()
-        if operator not in CONDITIONAL_OPERATORS:
-            raise ValueError(
-                "The {0} must be one of {1}".format(
-                    CONDITIONAL_OPERATOR,
-                    CONDITIONAL_OPERATORS
-                )
-            )
-        return {
-            CONDITIONAL_OPERATOR: operator
-        }
-
     async def get_item_attribute_map(self, table_name, attributes, item_key=ITEM, pythonic_key=True):
         """
         Builds up a dynamodb compatible AttributeValue map
@@ -652,52 +391,6 @@ class AsyncConnection(object):
             attributes,
             item_key=item_key,
             pythonic_key=pythonic_key)
-
-    def get_expected_map(self, table_name, expected):
-        """
-        Builds the expected map that is common to several operations
-        """
-        kwargs = {EXPECTED: {}}
-        for key, condition in expected.items():
-            if EXISTS in condition:
-                kwargs[EXPECTED][key] = {
-                    EXISTS: condition.get(EXISTS)
-                }
-            elif VALUE in condition:
-                kwargs[EXPECTED][key] = {
-                    VALUE: {
-                        self.get_attribute_type(table_name, key): condition.get(VALUE)
-                    }
-                }
-            elif COMPARISON_OPERATOR in condition:
-                kwargs[EXPECTED][key] = {
-                    COMPARISON_OPERATOR: condition.get(COMPARISON_OPERATOR),
-                }
-                values = []
-                for value in condition.get(ATTR_VALUE_LIST, []):
-                    attr_type = self.get_attribute_type(table_name, key, value)
-                    values.append({attr_type: self.parse_attribute(value)})
-                if condition.get(COMPARISON_OPERATOR) not in [NULL, NOT_NULL]:
-                    kwargs[EXPECTED][key][ATTR_VALUE_LIST] = values
-        return kwargs
-
-    def parse_attribute(self, attribute, return_type=False):
-        """
-        Returns the attribute value, where the attribute can be
-        a raw attribute value, or a dictionary containing the type:
-        {'S': 'String value'}
-        """
-        if isinstance(attribute, dict):
-            for key in SHORT_ATTR_TYPES:
-                if key in attribute:
-                    if return_type:
-                        return key, attribute.get(key)
-                    return attribute.get(key)
-            raise ValueError("Invalid attribute supplied: {0}".format(attribute))
-        else:
-            if return_type:
-                return None, attribute
-            return attribute
 
     async def get_attribute_type(self, table_name, attribute_name, value=None):
         """
@@ -740,36 +433,6 @@ class AsyncConnection(object):
             if len(attr_value_list):
                 kwargs[QUERY_FILTER][key][ATTR_VALUE_LIST] = attr_value_list
         return kwargs
-
-    def get_consumed_capacity_map(self, return_consumed_capacity):
-        """
-        Builds the consumed capacity map that is common to several operations
-        """
-        if return_consumed_capacity.upper() not in RETURN_CONSUMED_CAPACITY_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_CONSUMED_CAPACITY_VALUES))
-        return {
-            RETURN_CONSUMED_CAPACITY: str(return_consumed_capacity).upper()
-        }
-
-    def get_return_values_map(self, return_values):
-        """
-        Builds the return values map that is common to several operations
-        """
-        if return_values.upper() not in RETURN_VALUES_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_VALUES, RETURN_VALUES_VALUES))
-        return {
-            RETURN_VALUES: str(return_values).upper()
-        }
-
-    def get_item_collection_map(self, return_item_collection_metrics):
-        """
-        Builds the item collection map
-        """
-        if return_item_collection_metrics.upper() not in RETURN_ITEM_COLL_METRICS_VALUES:
-            raise ValueError("{0} must be one of {1}".format(RETURN_ITEM_COLL_METRICS, RETURN_ITEM_COLL_METRICS_VALUES))
-        return {
-            RETURN_ITEM_COLL_METRICS: str(return_item_collection_metrics).upper()
-        }
 
     async def get_exclusive_start_key_map(self, table_name, exclusive_start_key):
         """
@@ -1439,34 +1102,3 @@ class AsyncConnection(object):
             for value in values
         ]
         return getattr(Path([attribute_name]), operator)(*values)
-
-    def _check_actions(self, actions, attribute_updates):
-        if actions is not None:
-            if attribute_updates is not None:
-                raise ValueError("Legacy attribute updates cannot be used with update actions")
-        else:
-            if attribute_updates is not None:
-                warnings.warn("Legacy attribute updates are deprecated in favor of update actions")
-
-    def _check_condition(self, name, condition, expected_or_filter, conditional_operator):
-        if condition is not None:
-            if not isinstance(condition, Condition):
-                raise ValueError("'{0}' must be an instance of Condition".format(name))
-            if expected_or_filter or conditional_operator is not None:
-                raise ValueError("Legacy conditional parameters cannot be used with condition expressions")
-        else:
-            if expected_or_filter or conditional_operator is not None:
-                warnings.warn("Legacy conditional parameters are deprecated in favor of condition expressions")
-
-    @staticmethod
-    def _reverse_dict(d):
-        return dict((v, k) for k, v in d.items())
-
-
-def _convert_binary(attr):
-    if BINARY_SHORT in attr:
-        attr[BINARY_SHORT] = b64decode(attr[BINARY_SHORT].encode(DEFAULT_ENCODING))
-    elif BINARY_SET_SHORT in attr:
-        value = attr[BINARY_SET_SHORT]
-        if value and len(value):
-            attr[BINARY_SET_SHORT] = set(b64decode(v.encode(DEFAULT_ENCODING)) for v in value)
