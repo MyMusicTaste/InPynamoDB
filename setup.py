@@ -1,13 +1,11 @@
 from setuptools import setup, find_packages
 
 install_requires = [
-    'PynamoDB==3.2.1',
-    'aiobotocore==0.8.0',
-    'botocore==1.10.12',
-    'aiohttp==3.1.0'
+    'PynamoDB==3.3.0',
+    'aiobotocore==0.9.2'
 ]
 
-python_requires = '>=3.6'
+python_requires = '>=3.5'
 
 
 def version():
@@ -24,7 +22,7 @@ setup(
     description='Asynchronous implementation of PynamoDB',
     zip_safe=False,
     license='MIT',
-    keywords='python dynamodb amazon async',
+    keywords='python dynamodb amazon async pynamodb',
     install_requires=install_requires,
     classifiers=[
         'Development Status :: 1 - Developing',
