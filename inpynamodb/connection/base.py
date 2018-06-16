@@ -1,10 +1,9 @@
 """
 Lowest level connection
 """
+import json
 import random
 import uuid
-import warnings
-from base64 import b64decode
 
 import aiohttp
 import asyncio
@@ -12,10 +11,9 @@ import logging
 import math
 import time
 
-from threading import local
 from aiobotocore import get_session
 from pynamodb.connection.base import MetaTable, Connection
-from pynamodb.expressions.condition import Condition
+from yarl import URL
 
 from inpynamodb.settings import get_settings_value
 from botocore.exceptions import BotoCoreError, ClientError
@@ -54,6 +52,15 @@ class AsyncConnection(Connection):
     """
     A higher level abstraction over aiobotocore
     """
+    def __init__(self, region=None, host=None, session_cls=None,
+                 request_timeout_seconds=None, max_retry_attempts=None, base_backoff_ms=None):
+        if session_cls is None:
+            session_cls = aiohttp.ClientSession
+
+        super(AsyncConnection, self).__init__(region=region, host=host, session_cls=session_cls,
+                                              request_timeout_seconds=request_timeout_seconds,
+                                              max_retry_attempts=max_retry_attempts, base_backoff_ms=base_backoff_ms)
+
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"
 
@@ -63,13 +70,41 @@ class AsyncConnection(Connection):
         """
         boto_prepared_request = self.client._endpoint.create_request(request_dict, operation_model)
 
-        async with aiohttp.ClientSession() as session:
-            return session.request(
-                boto_prepared_request.method,
-                boto_prepared_request.url,
-                data=boto_prepared_request.body,
-                headers=boto_prepared_request.headers
-            )
+        for k, v in boto_prepared_request.headers.items():
+            if isinstance(v, bytes):
+                boto_prepared_request.headers[k] = v.decode('utf-8')
+
+        session = self.requests_session
+
+        proxy = self._convert_proxies_to_proxy()
+
+        return session.request(
+            boto_prepared_request.method,
+            boto_prepared_request.url,
+            timeout=self._request_timeout_seconds,
+            proxy=proxy,
+            data=boto_prepared_request.body,
+            headers=boto_prepared_request.headers
+        )
+
+    def _convert_proxies_to_proxy(self):
+        """
+        To convert requests `proxies` to aiohttp.request `proxy` argument.
+
+        In requests, `proxies` in dict looks like:
+        {'http': 'http://10.0.1.2:1810',
+         'https': 'https://10.0.1.2:8103}
+
+        In aiohttp.request, `proxy` arugment should be str which can be parsed in yarl.
+        """
+        if not self.client._endpoint.proxies:
+            return None
+
+        # aiohttp.request only accepts `http` proxies
+        try:
+            return self.client._endpoint.proxies['http']
+        except (TypeError, KeyError):
+            return None
 
     async def dispatch(self, operation_name, operation_kwargs):
         """
@@ -102,7 +137,7 @@ class AsyncConnection(Connection):
             operation_kwargs,
             operation_model
         )
-        request = await self._create_prepared_request(request_dict, operation_model)
+        # request = await self._create_prepared_request(request_dict, operation_model)
 
         for i in range(0, self._max_retry_attempts_exception + 1):
             attempt_number = i + 1
@@ -110,12 +145,9 @@ class AsyncConnection(Connection):
 
             response = None
             try:
-                response = await request(
-                    timeout=self._request_timeout_seconds,
-                    proxies=self.client._endpoint.proxies,
-                )
+                async with await self._create_prepared_request(request_dict, operation_model) as response:
+                    data = json.loads(await response.text())
 
-                data = await response.json()
 
             except (aiohttp.ClientResponseError, ValueError) as e:
                 if is_last_attempt_for_exceptions:
@@ -135,7 +167,7 @@ class AsyncConnection(Connection):
                     )
                     continue
 
-            if response.status_code >= 300:
+            if response.status >= 300:
                 # Extract error code from __type
                 code = data.get('__type', '')
                 if '#' in code:
@@ -157,7 +189,7 @@ class AsyncConnection(Connection):
                     if is_last_attempt_for_exceptions:
                         log.debug('Reached the maximum number of retry attempts: %s', attempt_number)
                         raise
-                    elif response.status_code < 500 and code != 'ProvisionedThroughputExceededException':
+                    elif response.status < 500 and code != 'ProvisionedThroughputExceededException':
                         # We don't retry on a ConditionalCheckFailedException or other 4xx (except for
                         # throughput related errors) because we assume they will fail in perpetuity.
                         # Retrying when there is already contention could cause other problems

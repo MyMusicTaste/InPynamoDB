@@ -3,8 +3,7 @@ import logging
 import os
 from os import getenv
 
-import aiobotocore
-from botocore.vendored import requests
+import aiohttp
 
 log = logging.getLogger(__name__)
 
@@ -13,7 +12,7 @@ default_settings_dict = {
     'max_retry_attempts': 3,
     'base_backoff_ms': 25,
     'region': 'us-east-1',
-    'session_cls': aiobotocore.AioSession,
+    'session_cls': aiohttp.ClientSession,
     'allow_rate_limited_scan_without_consumed_capacity': False,
 }
 

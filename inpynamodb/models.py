@@ -22,12 +22,10 @@ from pynamodb.exceptions import DoesNotExist, TableError, TableDoesNotExist
 from pynamodb.models import Model as PynamoDBModel, DefaultMeta, ModelContextManager as PynamoDBModelContextManager
 from pynamodb.types import HASH, RANGE
 
-from inpynamodb.attributes import AttributeContainerMeta
 from inpynamodb.connection import TableConnection
 from inpynamodb.connection.base import MetaTable
 from inpynamodb.indexes import Index, GlobalSecondaryIndex
 from inpynamodb.pagination import ResultIterator
-from inpynamodb.settings import get_settings_value
 
 
 class ModelContextManager(PynamoDBModelContextManager):
@@ -161,6 +159,13 @@ class Model(PynamoDBModel):
         self._range_key = range_key
         self._save_on_exit = save_on_exit
         self._attributes = attributes
+
+    @classmethod
+    async def initialize(cls, hash_key=None, range_key=None, **attributes):
+        warnings.warn("Model `initialize()` method is deprecated and will be removed on next release. "
+                      "Please use `async with Model() ...` style context manager.", category=DeprecationWarning)
+
+        return await cls(hash_key=hash_key, range_key=range_key, **attributes).__aenter__()
 
     async def __aenter__(self):
         if self._hash_key is not None:

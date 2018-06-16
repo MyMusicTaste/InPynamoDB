@@ -1,6 +1,8 @@
 import collections
 
-from inpynamodb.attributes import UTCDateTimeAttribute, MapAttribute
+from pynamodb.attributes import UTCDateTimeAttribute
+
+from inpynamodb.attributes import MapAttribute
 from dateutil import parser as DateutilParser
 
 

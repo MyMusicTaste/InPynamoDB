@@ -496,13 +496,13 @@ class ModelTestCase(TestCase):
         self.assertEqual(UserModel.Meta.request_timeout_seconds, 60)
         self.assertEqual(UserModel.Meta.max_retry_attempts, 3)
         self.assertEqual(UserModel.Meta.base_backoff_ms, 25)
-        self.assertTrue(UserModel.Meta.session_cls is aiobotocore.AioSession)
+        self.assertTrue(UserModel.Meta.session_cls is aiohttp.ClientSession)
 
         self.assertEqual(UserModel._connection.connection._request_timeout_seconds, 60)
         self.assertEqual(UserModel._connection.connection._max_retry_attempts_exception, 3)
         self.assertEqual(UserModel._connection.connection._base_backoff_ms, 25)
 
-        self.assertTrue(type(UserModel._connection.connection.requests_session) is aiobotocore.AioSession)
+        self.assertTrue(type(UserModel._connection.connection.requests_session) is aiohttp.ClientSession)
 
         with patch(PATCH_METHOD) as req:
             req.return_value = MODEL_TABLE_DATA
