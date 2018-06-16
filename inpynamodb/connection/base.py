@@ -223,6 +223,10 @@ class AsyncConnection(Connection):
         except AttributeError:
             self._local.session = get_session()
 
+        # Check if loop is closed
+        if not self._local.session._loop.is_running():
+            self._local.session = get_session()
+
         return self._local.session
 
     @property
