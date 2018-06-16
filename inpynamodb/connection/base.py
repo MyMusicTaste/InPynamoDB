@@ -236,6 +236,11 @@ class AsyncConnection(Connection):
         """
         if self._requests_session is None:
             self._requests_session = self.session_cls()
+
+        # Check if loop is closed
+        if not self._requests_session._loop.is_running():
+            self._requests_session = self.session_cls()
+
         return self._requests_session
 
     @property
