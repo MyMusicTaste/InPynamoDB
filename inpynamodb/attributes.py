@@ -4,38 +4,6 @@ from pynamodb.attributes import AttributeContainer as PynamoDBAttributeContainer
 from pynamodb.attributes import MapAttribute as PynamoDBMapAttribute
 
 
-class AttributeContainer(PynamoDBAttributeContainer):
-    def as_dict(self, attributes_to_get=None, include_none=True):
-        result = {}
-
-        if include_none:
-            if attributes_to_get is None:
-                for k in self._get_attributes().keys():
-                    attr_value = self.__getattribute__(k)
-                    if isinstance(attr_value, MapAttribute):
-                        result[k] = attr_value.as_dict(include_none=include_none)
-                    else:
-                        result[k] = attr_value
-            else:
-                for k, v in self._get_attributes().items():
-                    if k in attributes_to_get:
-                        attr_value = self.__getattribute__(k)
-                        if isinstance(v, MapAttribute):
-                            result[k] = attr_value.as_dict(include_none=include_none)
-                        else:
-                            result[k] = v
-
-        if attributes_to_get is None:
-            for key, value in self.attribute_values.items():
-                result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
-        else:
-            for key, value in self.attribute_values.items():
-                if key in attributes_to_get:
-                    result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
-
-        return result
-
-
 class UUIDAttribute(UnicodeAttribute):
     def __init__(self, hash_key=False, range_key=False, null=None,
                  default=None, uuid_version=1, attr_name=None):
