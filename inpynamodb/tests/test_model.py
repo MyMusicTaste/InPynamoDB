@@ -479,7 +479,7 @@ class ModelTestCase(TestCase):
             else:
                 return {}
 
-        fake_db = MagicMock()
+        fake_db = CoroutineMock()
         fake_db.side_effect = fake_dynamodb
 
         with patch(PATCH_METHOD, new=fake_db):

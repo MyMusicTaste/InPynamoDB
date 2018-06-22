@@ -11,9 +11,9 @@ import logging
 import math
 import time
 
+from threading import local
 from aiobotocore import get_session
 from pynamodb.connection.base import MetaTable, Connection
-from yarl import URL
 
 from inpynamodb.settings import get_settings_value
 from botocore.exceptions import BotoCoreError, ClientError
@@ -30,17 +30,12 @@ from pynamodb.constants import DESCRIBE_TABLE, LIST_TABLES, UPDATE_TABLE, DELETE
     ACTION, ATTR_UPDATE_ACTIONS, DELETE, PUT, UPDATE_EXPRESSION, UPDATE_ITEM, ITEM, PUT_ITEM, REQUEST_ITEMS, \
     PUT_REQUEST, DELETE_REQUEST, BATCH_WRITE_ITEM, CONSISTENT_READ, PROJECTION_EXPRESSION, KEYS, BATCH_GET_ITEM, \
     COMPARISON_OPERATOR_VALUES, KEY_CONDITION_OPERATOR_MAP, KEY_CONDITION_EXPRESSION, FILTER_EXPRESSION, SELECT_VALUES, \
-    SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN, \
-    EXCLUSIVE_START_KEY, SHORT_ATTR_TYPES, BINARY_SHORT, BINARY_SET_SHORT, DEFAULT_ENCODING, RESPONSES, \
-    UNPROCESSED_KEYS, UNPROCESSED_ITEMS, ATTRIBUTES, CONDITIONAL_OPERATORS, EXPECTED, RETURN_CONSUMED_CAPACITY_VALUES, \
-    RETURN_ITEM_COLL_METRICS, RETURN_VALUES_VALUES, RETURN_VALUES, RETURN_ITEM_COLL_METRICS_VALUES
+    SELECT, SCAN_INDEX_FORWARD, QUERY, GET_ITEM, ITEMS, LAST_EVALUATED_KEY, SEGMENT, TOTAL_SEGMENTS, SCAN
 from pynamodb.exceptions import TableError, TableDoesNotExist, DeleteError, UpdateError, PutError, GetError, QueryError, \
     ScanError, VerboseClientError
 from pynamodb.expressions.operand import Path
 from pynamodb.expressions.projection import create_projection_expression
 from pynamodb.expressions.update import Update
-
-from pynamodb.types import RANGE, HASH
 
 BOTOCORE_EXCEPTIONS = (BotoCoreError, ClientError)
 
@@ -52,14 +47,16 @@ class AsyncConnection(Connection):
     """
     A higher level abstraction over aiobotocore
     """
+
     def __init__(self, region=None, host=None, session_cls=None,
                  request_timeout_seconds=None, max_retry_attempts=None, base_backoff_ms=None):
-        if session_cls is None:
-            session_cls = aiohttp.ClientSession
-
-        super(AsyncConnection, self).__init__(region=region, host=host, session_cls=session_cls,
-                                              request_timeout_seconds=request_timeout_seconds,
-                                              max_retry_attempts=max_retry_attempts, base_backoff_ms=base_backoff_ms)
+        super(AsyncConnection, self).__init__(
+            region=region,
+            host=host,
+            session_cls=get_settings_value('session_cls') if session_cls is None else session_cls,
+            request_timeout_seconds=request_timeout_seconds,
+            max_retry_attempts=max_retry_attempts,
+            base_backoff_ms=base_backoff_ms)
 
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"

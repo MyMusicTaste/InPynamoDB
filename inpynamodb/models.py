@@ -19,7 +19,8 @@ from pynamodb.constants import BATCH_GET_PAGE_LIMIT, RESPONSES, UNPROCESSED_KEYS
     SCAN_OPERATOR_MAP, KEY, INDEX_NAME, KEY_SCHEMA, PROJECTION, PROJECTION_TYPE, PROVISIONED_THROUGHPUT, \
     NON_KEY_ATTRIBUTES, ATTR_TYPE, KEY_TYPE
 from pynamodb.exceptions import DoesNotExist, TableError, TableDoesNotExist
-from pynamodb.models import Model as PynamoDBModel, DefaultMeta, ModelContextManager as PynamoDBModelContextManager
+from pynamodb.models import Model as PynamoDBModel, \
+    ModelContextManager as PynamoDBModelContextManager, MetaModel as PynamoDBMetaModel
 from pynamodb.types import HASH, RANGE
 
 from inpynamodb.attributes import MapAttribute
@@ -27,6 +28,7 @@ from inpynamodb.connection import TableConnection
 from inpynamodb.connection.base import MetaTable
 from inpynamodb.indexes import Index, GlobalSecondaryIndex
 from inpynamodb.pagination import ResultIterator
+from inpynamodb.settings import get_settings_value
 
 
 class ModelContextManager(PynamoDBModelContextManager):
@@ -132,7 +134,34 @@ class BatchWrite(ModelContextManager):
             unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
 
 
-class Model(PynamoDBModel):
+class MetaModel(PynamoDBMetaModel):
+    """
+    Model meta class
+
+    This class is just here so that index queries have nice syntax.
+    Model.index.query()
+    """
+    def __init__(self, name, bases, attrs):
+        if isinstance(attrs, dict):
+            for attr_name, attr_obj in attrs.items():
+                if attr_name == META_CLASS_NAME:
+                    if not hasattr(attr_obj, REGION):
+                        setattr(attr_obj, REGION, get_settings_value('region'))
+                    if not hasattr(attr_obj, HOST):
+                        setattr(attr_obj, HOST, get_settings_value('host'))
+                    if not hasattr(attr_obj, 'session_cls'):
+                        setattr(attr_obj, 'session_cls', get_settings_value('session_cls'))
+                    if not hasattr(attr_obj, 'request_timeout_seconds'):
+                        setattr(attr_obj, 'request_timeout_seconds', get_settings_value('request_timeout_seconds'))
+                    if not hasattr(attr_obj, 'base_backoff_ms'):
+                        setattr(attr_obj, 'base_backoff_ms', get_settings_value('base_backoff_ms'))
+                    if not hasattr(attr_obj, 'max_retry_attempts'):
+                        setattr(attr_obj, 'max_retry_attempts', get_settings_value('max_retry_attempts'))
+
+        super(MetaModel, self).__init__(name, bases, attrs)
+
+
+class Model(PynamoDBModel, metaclass=MetaModel):
     """
     Defines a `InPynamoDB` Model
 
@@ -718,7 +747,7 @@ class Model(PynamoDBModel):
             attr = self.get_attributes().get(attr_name)
             if attr:
                 setattr(self, attr_name, attr.deserialize(attr.get_value(value)))
-        return data
+        return await self.from_raw_data(data[ATTRIBUTES])
 
     async def save(self, condition=None, conditional_operator=None, **expected_values):
         """
@@ -763,6 +792,7 @@ class Model(PynamoDBModel):
                 f'Model: {cls.__module__}.{cls.__name__}\n'
                 f'See https://pynamodb.readthedocs.io/en/latest/release_notes.html'
             )
+
         if cls._connection is None:
             cls._connection = TableConnection(cls.Meta.table_name,
                                               region=cls.Meta.region,
