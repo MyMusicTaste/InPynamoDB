@@ -134,7 +134,6 @@ class AsyncConnection(Connection):
             operation_kwargs,
             operation_model
         )
-        # request = await self._create_prepared_request(request_dict, operation_model)
 
         for i in range(0, self._max_retry_attempts_exception + 1):
             attempt_number = i + 1
@@ -143,8 +142,7 @@ class AsyncConnection(Connection):
             response = None
             try:
                 async with await self._create_prepared_request(request_dict, operation_model) as response:
-                    data = json.loads(await response.text())
-
+                    data = json.loads(await response.text(encoding='utf-8'))
 
             except (aiohttp.ClientResponseError, ValueError) as e:
                 if is_last_attempt_for_exceptions:
