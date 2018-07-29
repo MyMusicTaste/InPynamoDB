@@ -203,7 +203,7 @@ class AsyncConnection(Connection):
                             e.__class__.__name__,
                             e
                         )
-                        asyncio.sleep(sleep_time_ms / 1000.0)
+                        await asyncio.sleep(sleep_time_ms / 1000.0)
                         continue
 
             return self._handle_binary_attributes(data)
