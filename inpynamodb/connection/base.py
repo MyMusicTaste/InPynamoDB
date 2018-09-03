@@ -11,7 +11,6 @@ import logging
 import math
 import time
 
-from threading import local
 from aiobotocore import get_session
 from pynamodb.connection.base import MetaTable, Connection
 

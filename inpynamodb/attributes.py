@@ -93,14 +93,14 @@ class MapAttribute(PynamoDBMapAttribute):
 
         if include_none:
             if attributes_to_get is None:
-                for k in self._get_attributes().keys():
+                for k in self.get_attributes().keys():
                     attr_value = self.__getattribute__(k)
                     if isinstance(attr_value, MapAttribute):
                         result[k] = attr_value.as_dict(include_none=include_none)
                     else:
                         result[k] = attr_value
             else:
-                for k, v in self._get_attributes().items():
+                for k, v in self.get_attributes().items():
                     if k in attributes_to_get:
                         attr_value = self.__getattribute__(k)
                         if isinstance(v, MapAttribute):

@@ -29,17 +29,6 @@ class ConnectionTestCase(TestCase):
         conn = TableConnection(self.test_table_name)
         self.assertIsNotNone(conn)
 
-    def test_connection_session_set_credentials(self):
-        conn = TableConnection(
-            self.test_table_name,
-            aws_access_key_id='access_key_id',
-            aws_secret_access_key='secret_access_key')
-
-        credentials = conn.connection.session.get_credentials()
-
-        self.assertEqual(credentials.access_key, 'access_key_id')
-        self.assertEqual(credentials.secret_key, 'secret_access_key')
-
     async def test_create_table(self):
         """
         TableConnection.create_table

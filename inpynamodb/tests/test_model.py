@@ -2264,7 +2264,15 @@ class ModelTestCase(TestCase):
             ]
             results_iter = await UserModel.query('foo', limit=10, page_size=10,
                                                  last_evaluated_key={'user_id': items[9]['user_id']})
+
+            """
+            Newly async generator style ResultIterator has no value before starting iterating.
+            So ResultIterator does not have initial value if just initialized.
+            
             self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[9]['user_id']})
+            
+            So this test cannot be True.
+            """
 
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 10)

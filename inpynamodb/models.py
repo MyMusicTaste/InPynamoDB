@@ -218,7 +218,7 @@ class Model(PynamoDBModel, metaclass=MetaModel):
             await self.save()
 
     @classmethod
-    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None):
+    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None, return_consumed_capacity=None):
         """
         BatchGetItem for this model
 
@@ -235,7 +235,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                     page, unprocessed_keys = await cls._batch_get_page(
                         keys_to_get,
                         consistent_read=consistent_read,
-                        attributes_to_get=attributes_to_get
+                        attributes_to_get=attributes_to_get,
+                        return_consumed_capacity=return_consumed_capacity
                     )
                     for batch_item in page:
                         yield (await cls.from_raw_data(batch_item))
@@ -270,7 +271,7 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                 keys_to_get = []
 
     @classmethod
-    async def _batch_get_page(cls, keys_to_get, consistent_read, attributes_to_get):
+    async def _batch_get_page(cls, keys_to_get, consistent_read, attributes_to_get, return_consumed_capacity=None):
         """
         Returns a single page from BatchGetItem
         Also returns any unprocessed items
@@ -281,7 +282,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
         """
         log.debug("Fetching a BatchGetItem page")
         data = await cls._get_connection().batch_get_item(
-            keys_to_get, consistent_read=consistent_read, attributes_to_get=attributes_to_get
+            keys_to_get, consistent_read=consistent_read, attributes_to_get=attributes_to_get,
+            return_consumed_capacity=return_consumed_capacity
         )
         item_data = data.get(RESPONSES).get(cls.Meta.table_name)
         unprocessed_items = data.get(UNPROCESSED_KEYS).get(cls.Meta.table_name, {}).get(KEYS, None)
@@ -747,7 +749,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
             attr = self.get_attributes().get(attr_name)
             if attr:
                 setattr(self, attr_name, attr.deserialize(attr.get_value(value)))
-        return await self.from_raw_data(data[ATTRIBUTES])
+
+        return data
 
     async def save(self, condition=None, conditional_operator=None, **expected_values):
         """
