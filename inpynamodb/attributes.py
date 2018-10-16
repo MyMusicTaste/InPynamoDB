@@ -108,12 +108,13 @@ class MapAttribute(PynamoDBMapAttribute):
                         else:
                             result[k] = v
 
-        if attributes_to_get is None:
-            for key, value in self.attribute_values.items():
-                result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
         else:
-            for key, value in self.attribute_values.items():
-                if key in attributes_to_get:
+            if attributes_to_get is None:
+                for key, value in self.attribute_values.items():
                     result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
+            else:
+                for key, value in self.attribute_values.items():
+                    if key in attributes_to_get:
+                        result[key] = value.as_dict() if isinstance(value, MapAttribute) else value
 
         return result
