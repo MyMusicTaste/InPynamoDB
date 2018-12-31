@@ -576,9 +576,9 @@ class ModelTestCase(TestCase):
                 'TableName': 'UserModel'
             }
             actual = req.call_args_list[1][0][1]
-            self.assertEquals(sorted(actual.keys()), sorted(params.keys()))
-            self.assertEquals(actual['TableName'], params['TableName'])
-            self.assertEquals(actual['ProvisionedThroughput'], params['ProvisionedThroughput'])
+            self.assertEqual(sorted(actual.keys()), sorted(params.keys()))
+            self.assertEqual(actual['TableName'], params['TableName'])
+            self.assertEqual(actual['ProvisionedThroughput'], params['ProvisionedThroughput'])
             self.assert_dict_lists_equal(sorted(actual['KeySchema'], key=lambda x: x['AttributeName']),
                                          sorted(params['KeySchema'], key=lambda x: x['AttributeName']))
             # These come in random order
@@ -1006,7 +1006,7 @@ class ModelTestCase(TestCase):
                     deep_eq(args, params, _assert=True)
 
                     assert item.views is None
-                    self.assertEquals({'bob'}, item.custom_aliases)
+                    self.assertEqual({'bob'}, item.custom_aliases)
 
                 with patch(PATCH_METHOD) as req:
                     req.return_value = {
@@ -1066,7 +1066,7 @@ class ModelTestCase(TestCase):
                     deep_eq(args, params, _assert=True)
 
                     assert item.views is None
-                    self.assertEquals(set(['bob']), item.custom_aliases)
+                    self.assertEqual(set(['bob']), item.custom_aliases)
 
                 # Reproduces https://github.com/pynamodb/PynamoDB/issues/132
                 with patch(PATCH_METHOD) as req:
@@ -1104,7 +1104,7 @@ class ModelTestCase(TestCase):
                     deep_eq(args, params, _assert=True)
 
                     assert item.views is None
-                    self.assertEquals({'alias1', 'alias3'}, item.custom_aliases)
+                    self.assertEqual({'alias1', 'alias3'}, item.custom_aliases)
 
     async def test_update_item(self):
         """
@@ -2109,7 +2109,7 @@ class ModelTestCase(TestCase):
             req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
             results = [o async for o in await UserModel.query('foo', limit=25)]
             self.assertEqual(len(results), 5)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 25)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 25)
 
     async def test_query_limit_identical_to_available_items_single_page(self):
         with patch(PATCH_METHOD) as req:
@@ -2127,7 +2127,7 @@ class ModelTestCase(TestCase):
             req.return_value = {'Count': len(items), 'ScannedCount': len(items), 'Items': items}
             results = [o async for o in await UserModel.query('foo', limit=5)]
             self.assertEqual(len(results), 5)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 5)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 5)
 
     async def test_query_limit_less_than_available_items_multiple_page(self):
         with patch(PATCH_METHOD) as req:
@@ -2151,12 +2151,12 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 25)
             self.assertEqual(len(req.mock_calls), 3)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 25)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 25)
-            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 25)
-            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
-            self.assertEquals(results_iter.total_count, 30)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 25)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 25)
+            self.assertEqual(req.mock_calls[2][1][1]['Limit'], 25)
+            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(results_iter.total_count, 30)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
     async def test_query_limit_less_than_available_and_page_size(self):
         with patch(PATCH_METHOD) as req:
@@ -2180,12 +2180,12 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 25)
             self.assertEqual(len(req.mock_calls), 3)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
-            self.assertEquals(results_iter.total_count, 30)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(results_iter.total_count, 30)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
     async def test_query_limit_greater_than_available_items_multiple_page(self):
         with patch(PATCH_METHOD) as req:
@@ -2209,12 +2209,12 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 30)
             self.assertEqual(len(req.mock_calls), 3)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 50)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 50)
-            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 50)
-            self.assertEquals(results_iter.last_evaluated_key, None)
-            self.assertEquals(results_iter.total_count, 30)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 50)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 50)
+            self.assertEqual(req.mock_calls[2][1][1]['Limit'], 50)
+            self.assertEqual(results_iter.last_evaluated_key, None)
+            self.assertEqual(results_iter.total_count, 30)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
     async def test_query_limit_greater_than_available_items_and_page_size(self):
         with patch(PATCH_METHOD) as req:
@@ -2238,12 +2238,12 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 30)
             self.assertEqual(len(req.mock_calls), 3)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEquals(results_iter.last_evaluated_key, None)
-            self.assertEquals(results_iter.total_count, 30)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEqual(results_iter.last_evaluated_key, None)
+            self.assertEqual(results_iter.total_count, 30)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
     async def test_query_with_exclusive_start_key(self):
         with patch(PATCH_METHOD) as req:
@@ -2269,7 +2269,7 @@ class ModelTestCase(TestCase):
             Newly async generator style ResultIterator has no value before starting iterating.
             So ResultIterator does not have initial value if just initialized.
             
-            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[9]['user_id']})
+            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[9]['user_id']})
             
             So this test cannot be True.
             """
@@ -2277,10 +2277,10 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 10)
             self.assertEqual(len(req.mock_calls), 1)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
-            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[19]['user_id']})
-            self.assertEquals(results_iter.total_count, 10)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 10)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[19]['user_id']})
+            self.assertEqual(results_iter.total_count, 10)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 10)
 
     async def test_query(self):
         """
@@ -2614,12 +2614,12 @@ class ModelTestCase(TestCase):
             results = [o async for o in results_iter]
             self.assertEqual(len(results), 25)
             self.assertEqual(len(req.mock_calls), 3)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 10)
-            self.assertEquals(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEquals(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
-            self.assertEquals(results_iter.total_count, 30)
-            self.assertEquals(results_iter.page_iter.total_scanned_count, 60)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
+            self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
+            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(results_iter.total_count, 30)
+            self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
     async def test_scan_limit(self):
         """
@@ -2644,7 +2644,7 @@ class ModelTestCase(TestCase):
                 count += 1
                 self.assertIsNotNone(item)
             self.assertEqual(len(req.mock_calls), 1)
-            self.assertEquals(req.mock_calls[0][1][1]['Limit'], 4)
+            self.assertEqual(req.mock_calls[0][1][1]['Limit'], 4)
             self.assertEqual(count, 4)
 
         with patch(PATCH_METHOD, new=mock_scan) as req:
@@ -2653,8 +2653,8 @@ class ModelTestCase(TestCase):
                 count += 1
                 self.assertIsNotNone(item)
             self.assertEqual(len(req.mock_calls), 2)
-            self.assertEquals(req.mock_calls[1][1][1]['Limit'], 4)
-            self.assertEquals(req.mock_calls[1][1][1]['ConsistentRead'], True)
+            self.assertEqual(req.mock_calls[1][1][1]['Limit'], 4)
+            self.assertEqual(req.mock_calls[1][1][1]['ConsistentRead'], True)
             self.assertEqual(count, 4)
 
     async def test_rate_limited_scan(self):
@@ -2762,7 +2762,7 @@ class ModelTestCase(TestCase):
                 },
                 'TableName': 'UserModel'
             }
-            self.assertEquals(params, req.call_args[0][1])
+            self.assertEqual(params, req.call_args[0][1])
 
         with patch(PATCH_METHOD) as req:
             items = []
@@ -2795,7 +2795,7 @@ class ModelTestCase(TestCase):
                 'TableName': 'UserModel'
             }
 
-            self.assertEquals(params, req.call_args[0][1])
+            self.assertEqual(params, req.call_args[0][1])
 
         # you cannot scan with multiple conditions against the same key
         with pytest.raises(ValueError):
@@ -2871,7 +2871,7 @@ class ModelTestCase(TestCase):
                 },
                 'TableName': 'UserModel'
             }
-            self.assertEquals(params, req.call_args[0][1])
+            self.assertEqual(params, req.call_args[0][1])
 
         with patch(PATCH_METHOD) as req:
             items = []
@@ -2901,7 +2901,7 @@ class ModelTestCase(TestCase):
                 },
                 'TableName': 'UserModel'
             }
-            self.assertEquals(params, req.call_args[0][1])
+            self.assertEqual(params, req.call_args[0][1])
 
         # you cannot scan with multiple conditions against the same key
         with pytest.raises(ValueError):
@@ -3985,28 +3985,28 @@ class ModelTestCase(TestCase):
     async def test_model_works_like_model(self):
         async with self._get_office_employee() as office_employee:
             self.assertTrue(office_employee.person)
-            self.assertEquals('Justin', office_employee.person.fname)
-            self.assertEquals('Phillips', office_employee.person.lname)
-            self.assertEquals(31, office_employee.person.age)
-            self.assertEquals(True, office_employee.person.is_male)
+            self.assertEqual('Justin', office_employee.person.fname)
+            self.assertEqual('Phillips', office_employee.person.lname)
+            self.assertEqual(31, office_employee.person.age)
+            self.assertEqual(True, office_employee.person.is_male)
 
     async def test_list_works_like_list(self):
         async with self._get_grocery_list() as grocery_list:
             self.assertTrue(grocery_list.groceries)
-            self.assertEquals('butter', grocery_list.groceries[2])
+            self.assertEqual('butter', grocery_list.groceries[2])
 
     async def test_complex_model_is_complex(self):
         async with self._get_complex_thing() as complex_thing:
             self.assertTrue(complex_thing.person)
-            self.assertEquals(complex_thing.person.fname, 'Justin')
-            self.assertEquals(complex_thing.key, 123)
+            self.assertEqual(complex_thing.person.fname, 'Justin')
+            self.assertEqual(complex_thing.key, 123)
 
     async def test_list_of_map_works_like_list_of_map(self):
         async with self._get_office() as office:
             self.assertTrue(office.employees[1].person.is_male)
             self.assertFalse(office.employees[3].person.is_male)
-            self.assertEquals(office.employees[2].person.fname, 'Garrett')
-            self.assertEquals(office.employees[0].person.lname, 'Phillips')
+            self.assertEqual(office.employees[2].person.fname, 'Garrett')
+            self.assertEqual(office.employees[0].person.lname, 'Phillips')
 
     async def test_invalid_map_model_raises(self):
         fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
@@ -4081,12 +4081,12 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = GET_GROCERY_LIST_ITEM_DATA
             item = await GroceryList.get('Haight Street Market')
-            self.assertEquals(item.store_name, GET_GROCERY_LIST_ITEM_DATA.get(ITEM).get('store_name').get(STRING_SHORT))
-            self.assertEquals(
+            self.assertEqual(item.store_name, GET_GROCERY_LIST_ITEM_DATA.get(ITEM).get('store_name').get(STRING_SHORT))
+            self.assertEqual(
                 item.groceries[2],
                 GET_GROCERY_LIST_ITEM_DATA.get(ITEM).get('groceries').get(
                     LIST_SHORT)[2].get(STRING_SHORT))
-            self.assertEquals(item.store_name, 'Haight Street Market')
+            self.assertEqual(item.store_name, 'Haight Street Market')
 
     async def test_model_with_list_of_map_retrieve_from_db(self):
         fake_db = self.database_mocker(Office, OFFICE_MODEL_TABLE_DATA,
@@ -4096,10 +4096,10 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = GET_OFFICE_ITEM_DATA
             item = await Office.get(6161)
-            self.assertEquals(item.office_id,
+            self.assertEqual(item.office_id,
                               int(GET_OFFICE_ITEM_DATA.get(ITEM).get('office_id').get(NUMBER_SHORT)))
-            self.assertEquals(item.office_id, 6161)
-            self.assertEquals(
+            self.assertEqual(item.office_id, 6161)
+            self.assertEqual(
                 item.employees[2].person.fname,
                 GET_OFFICE_ITEM_DATA.get(ITEM).get('employees').get(
                     LIST_SHORT)[2].get(MAP_SHORT).get('person').get(MAP_SHORT).get('firstName').get(STRING_SHORT))
@@ -4112,11 +4112,11 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = COMPLEX_MODEL_ITEM_DATA
             item = await ComplexModel.get(123)
-            self.assertEquals(item.key,
+            self.assertEqual(item.key,
                               int(COMPLEX_MODEL_ITEM_DATA.get(ITEM).get(
                                   'key').get(NUMBER_SHORT)))
-            self.assertEquals(item.key, 123)
-            self.assertEquals(
+            self.assertEqual(item.key, 123)
+            self.assertEqual(
                 item.person.fname,
                 COMPLEX_MODEL_ITEM_DATA.get(ITEM).get('weird_person').get(
                     MAP_SHORT).get('firstName').get(STRING_SHORT))
@@ -4148,11 +4148,11 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = FULL_CAR_MODEL_ITEM_DATA
             item = await CarModel.get(123)
-            self.assertEquals(item.car_id,
+            self.assertEqual(item.car_id,
                               int(FULL_CAR_MODEL_ITEM_DATA.get(ITEM).get(
                                   'car_id').get(NUMBER_SHORT)))
-            self.assertEquals(item.car_info.make, 'Volkswagen')
-            self.assertEquals(item.car_info.model, 'Beetle')
+            self.assertEqual(item.car_info.make, 'Volkswagen')
+            self.assertEqual(item.car_info.model, 'Beetle')
 
     async def test_car_model_with_null_retrieve_from_db(self):
         fake_db = self.database_mocker(CarModel, CAR_MODEL_TABLE_DATA,
@@ -4162,10 +4162,10 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = CAR_MODEL_WITH_NULL_ITEM_DATA
             item = await CarModel.get(123)
-            self.assertEquals(item.car_id,
+            self.assertEqual(item.car_id,
                               int(CAR_MODEL_WITH_NULL_ITEM_DATA.get(ITEM).get(
                                   'car_id').get(NUMBER_SHORT)))
-            self.assertEquals(item.car_info.make, 'Dodge')
+            self.assertEqual(item.car_info.make, 'Dodge')
             self.assertIsNone(item.car_info.model)
 
     async def test_invalid_car_model_with_null_retrieve_from_db(self):
@@ -4176,7 +4176,7 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA
             item = await CarModel.get(123)
-            self.assertEquals(item.car_id,
+            self.assertEqual(item.car_id,
                               int(INVALID_CAR_MODEL_WITH_NULL_ITEM_DATA.get(ITEM).get(
                                   'car_id').get(NUMBER_SHORT)))
             self.assertIsNone(item.car_info.make)
@@ -4245,7 +4245,7 @@ class ModelTestCase(TestCase):
         with patch(PATCH_METHOD, new=fake_db) as req:
             req.return_value = TREE_MODEL_ITEM_DATA
             item = await TreeModel.get('123')
-            self.assertEquals(item.left.left.left.value, 3)
+            self.assertEqual(item.left.left.left.value, 3)
 
     async def test_conditional_operator_map_attribute(self):
         with patch(PATCH_METHOD) as req:
@@ -4267,9 +4267,9 @@ class ModelTestCase(TestCase):
         operations = 1
         arguments = 'args'
         rs = ResultSet(results=results, operation=operations, arguments=arguments)
-        self.assertEquals(rs.results, results)
-        self.assertEquals(rs.operation, operations)
-        self.assertEquals(rs.arguments, arguments)
+        self.assertEqual(rs.results, results)
+        self.assertEqual(rs.operation, operations)
+        self.assertEqual(rs.arguments, arguments)
 
     def test_result_set_iter(self):
         results = [1, 2, 3]
@@ -4435,7 +4435,7 @@ class ModelTestCase(TestCase):
 
             actual = req.call_args_list[1][0][1]
 
-            self.assertEquals(actual['TableName'], DOG_TABLE_DATA['Table']['TableName'])
+            self.assertEqual(actual['TableName'], DOG_TABLE_DATA['Table']['TableName'])
             self.assert_dict_lists_equal(actual['KeySchema'], DOG_TABLE_DATA['Table']['KeySchema'])
             self.assert_dict_lists_equal(actual['AttributeDefinitions'],
                                          DOG_TABLE_DATA['Table']['AttributeDefinitions'])
@@ -4448,7 +4448,7 @@ class ModelInitTestCase(TestCase):
             'bar': 'baz'
         }
         async with ExplicitRawMapModel(map_id=3, map_attr=attribute) as actual:
-            self.assertEquals(actual.map_attr['foo'], attribute['foo'])
+            self.assertEqual(actual.map_attr['foo'], attribute['foo'])
 
     async def test_raw_map_attribute_with_initialized_instance_init(self):
         attribute = {
@@ -4457,8 +4457,8 @@ class ModelInitTestCase(TestCase):
         }
         initialized_instance = MapAttribute(**attribute)
         async with ExplicitRawMapModel(map_id=3, map_attr=initialized_instance) as actual:
-            self.assertEquals(actual.map_attr['foo'], initialized_instance['foo'])
-            self.assertEquals(actual.map_attr['foo'], attribute['foo'])
+            self.assertEqual(actual.map_attr['foo'], initialized_instance['foo'])
+            self.assertEqual(actual.map_attr['foo'], attribute['foo'])
 
     async def test_subclassed_map_attribute_with_dict_init(self):
         attribute = {
@@ -4467,8 +4467,8 @@ class ModelInitTestCase(TestCase):
         }
         expected_model = CarInfoMap(**attribute)
         async with CarModel(car_id=1, car_info=attribute) as actual:
-            self.assertEquals(expected_model.make, actual.car_info.make)
-            self.assertEquals(expected_model.model, actual.car_info.model)
+            self.assertEqual(expected_model.make, actual.car_info.make)
+            self.assertEqual(expected_model.model, actual.car_info.model)
 
     async def test_subclassed_map_attribute_with_initialized_instance_init(self):
         attribute = {
@@ -4478,8 +4478,8 @@ class ModelInitTestCase(TestCase):
 
         expected_model = CarInfoMap(**attribute)
         async with CarModel(car_id=1, car_info=expected_model) as actual:
-            self.assertEquals(expected_model.make, actual.car_info.make)
-            self.assertEquals(expected_model.model, actual.car_info.model)
+            self.assertEqual(expected_model.make, actual.car_info.make)
+            self.assertEqual(expected_model.model, actual.car_info.model)
 
     def _get_bin_tree(self, multiplier=1):
         return {
@@ -4508,10 +4508,10 @@ class ModelInitTestCase(TestCase):
         left = self._get_bin_tree()
         right = self._get_bin_tree(multiplier=2)
         async with TreeModel(tree_key='key', left=left, right=right) as actual:
-            self.assertEquals(actual.left.left.right.value, 3)
-            self.assertEquals(actual.left.left.value, 2)
-            self.assertEquals(actual.right.right.left.value, 12)
-            self.assertEquals(actual.right.right.value, 14)
+            self.assertEqual(actual.left.left.right.value, 3)
+            self.assertEqual(actual.left.left.value, 2)
+            self.assertEqual(actual.right.right.left.value, 12)
+            self.assertEqual(actual.right.right.value, 14)
 
     async def test_subclassed_map_attribute_with_map_attribute_member_with_initialized_instance_init(self):
         left = self._get_bin_tree()
@@ -4519,7 +4519,7 @@ class ModelInitTestCase(TestCase):
         left_instance = TreeLeaf(**left)
         right_instance = TreeLeaf(**right)
         async with TreeModel(tree_key='key', left=left_instance, right=right_instance) as actual:
-            self.assertEquals(actual.left.left.right.value, left_instance.left.right.value)
-            self.assertEquals(actual.left.left.value, left_instance.left.value)
-            self.assertEquals(actual.right.right.left.value, right_instance.right.left.value)
-            self.assertEquals(actual.right.right.value, right_instance.right.value)
+            self.assertEqual(actual.left.left.right.value, left_instance.left.right.value)
+            self.assertEqual(actual.left.left.value, left_instance.left.value)
+            self.assertEqual(actual.right.right.left.value, right_instance.right.left.value)
+            self.assertEqual(actual.right.right.value, right_instance.right.value)
