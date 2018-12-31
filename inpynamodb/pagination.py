@@ -100,8 +100,7 @@ class PageIterator(object):
         if rate_limit:
             self._rate_limiter = RateLimiter(rate_limit)
 
-    @aiter_compat
-    async def __aiter__(self):
+    def __aiter__(self):
         return self
 
     async def __anext__(self):
@@ -177,8 +176,7 @@ class ResultIterator(object):
         self._index = 0 if self._items else self._count
         self._total_count += self._count
 
-    @aiter_compat
-    async def __aiter__(self):
+    def __aiter__(self):
         return self
 
     async def __anext__(self):
