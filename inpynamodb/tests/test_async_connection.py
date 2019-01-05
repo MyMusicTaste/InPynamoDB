@@ -22,15 +22,37 @@ class TestAsyncConnection:
     test_table_name = 'ci-table'
     region = DEFAULT_REGION
 
-    def test_get_client(self):
+    @pytest.fixture(scope="function")
+    async def client_session_fixture(self):
+        conn = AsyncConnection(region=self.region)
+
+        yield
+
+        if not conn.requests_session.closed:
+            await conn.close()
+            assert conn.requests_session.closed
+
+    @pytest.mark.asyncio
+    async def test_get_client(self):
+        """
+        This test cannot use client_session_fixture due to keyword arguments should be injected.
+        """
         conn = AsyncConnection()
         assert conn is not None
         conn = AsyncConnection(host='http://foohost')
         assert conn.client is not None
         assert conn is not None
         assert f"AsyncConnection<{conn.host}>" == repr(conn)
+        await conn.close()
 
-    def test_subsequent_client_is_not_cached_when_credentials_none(self):
+        # Test if aiohttp ClientSession is successfully closed
+        assert conn.requests_session.closed
+
+    @pytest.mark.asyncio
+    async def test_subsequent_client_is_not_cached_when_credentials_none(self):
+        """
+        This test cannot use client_session_fixture due to client_session should be mocked.
+        """
         with patch('inpynamodb.connection.AsyncConnection.session') as session_mock:
             session_mock.create_client.return_value._request_signer._credentials = None
             conn = AsyncConnection()
@@ -47,7 +69,15 @@ class TestAsyncConnection:
                 any_order=True
             )
 
-    def test_subsequent_client_is_cached_when_credentials_truthy(self):
+            await conn.close()
+            # Test if aiohttp ClientSession is successfully closed
+            assert conn.requests_session.closed
+
+    @pytest.mark.asyncio
+    async def test_subsequent_client_is_cached_when_credentials_truthy(self):
+        """
+        This test cannot use client_session_fixture due to client_session should be mocked.
+        """
         with patch('inpynamodb.connection.AsyncConnection.session') as session_mock:
             session_mock.create_client.return_value._request_signer._credentials = True
             conn = AsyncConnection()
@@ -60,12 +90,16 @@ class TestAsyncConnection:
                 mock.call('dynamodb', 'us-east-1', endpoint_url=None)
             ) == 1
 
+            await conn.close()
+            # Test if aiohttp ClientSession is successfully closed
+            assert conn.requests_session.closed
+
     @pytest.mark.asyncio
-    async def test_create_table(self):
+    async def test_create_table(self, client_session_fixture):
         """
         AsyncConnection.create_table
         """
-        conn = AsyncConnection(self.region)
+        conn = client_session_fixture
         kwargs = {
             'read_capacity_units': 1,
             'write_capacity_units': 1,
@@ -220,32 +254,32 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_delete_table(self):
+    async def test_delete_table(self, client_session_fixture):
         """
         AsyncConnection.delete_table
         """
         params = {'TableName': 'ci-table'}
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             await conn.delete_table(self.test_table_name)
             kwargs = req.call_args[0][1]
             assert kwargs == params
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             with pytest.raises(TableError):
                 await conn.delete_table(self.test_table_name)
 
     @pytest.mark.asyncio
-    async def test_update_table(self):
+    async def test_update_table(self, client_session_fixture):
         """
         AsyncConnection.update_table
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             params = {
                 'ProvisionedThroughput': {
                     'WriteCapacityUnits': 2,
@@ -309,13 +343,13 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_describe_table(self):
+    async def test_describe_table(self, client_session_fixture):
         """
         Connection.describe_table
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             await conn.describe_table(self.test_table_name)
             assert req.call_args[0][1] == {'TableName': 'ci-table'}
 
@@ -324,50 +358,50 @@ class TestAsyncConnection:
                 req.side_effect = ClientError(
                     {'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}}, "DescribeTable"
                 )
-                conn = AsyncConnection(self.region)
+                conn = client_session_fixture
                 await conn.describe_table(self.test_table_name)
 
         with pytest.raises(TableDoesNotExist):
             with patch(PATCH_METHOD) as req:
                 req.side_effect = ValueError()
-                conn = AsyncConnection(self.region)
+                conn = client_session_fixture
                 await conn.describe_table(self.test_table_name)
 
     @pytest.mark.asyncio
-    async def test_list_tables(self):
+    async def test_list_tables(self, client_session_fixture):
         """
         AsyncConnection.list_tables
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             await conn.list_tables(exclusive_start_table_name='Thread')
             assert req.call_args[0][1] == {'ExclusiveStartTableName': 'Thread'}
 
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             await conn.list_tables(limit=3)
             assert req.call_args[0][1] == {'Limit': 3}
 
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             await conn.list_tables()
             assert req.call_args[0][1] == {}
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            conn = AsyncConnection(self.region)
+            conn = client_session_fixture
             with pytest.raises(TableError):
                 await conn.list_tables()
 
     @pytest.mark.asyncio
-    async def test_delete_item(self):
+    async def test_delete_item(self, client_session_fixture):
         """
         AsyncConnection.delete_item
         """
-        conn = AsyncConnection(self.region)
+        conn = client_session_fixture
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
             await conn.describe_table(self.test_table_name)
@@ -565,11 +599,11 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_update_item(self):
+    async def test_update_item(self, client_session_fixture):
         """
         AsyncConnection.update_item
         """
-        conn = AsyncConnection()
+        conn = client_session_fixture
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
             await conn.describe_table(self.test_table_name)
@@ -983,11 +1017,11 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_put_item(self):
+    async def test_put_item(self, client_session_fixture):
         """
         AsyncConnection.put_item
         """
-        conn = AsyncConnection(self.region)
+        conn = client_session_fixture
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
             await conn.describe_table(self.test_table_name)
@@ -1215,12 +1249,12 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_batch_write_item(self):
+    async def test_batch_write_item(self, client_session_fixture):
         """
         AsyncConnection.batch_write_item
         """
         items = []
-        conn = AsyncConnection()
+        conn = client_session_fixture
         table_name = 'Thread'
         for i in range(10):
             items.append(
@@ -1344,12 +1378,12 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_batch_get_item(self):
+    async def test_batch_get_item(self, client_session_fixture):
         """
         AsyncConnection.batch_get_item
         """
         items = []
-        conn = AsyncConnection()
+        conn = client_session_fixture
         table_name = 'Thread'
         for i in range(10):
             items.append(
@@ -1428,11 +1462,11 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_query(self):
+    async def test_query(self, client_session_fixture):
         """
         AsyncConnection.query
         """
-        conn = AsyncConnection()
+        conn = client_session_fixture
         table_name = 'Thread'
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
@@ -1702,11 +1736,11 @@ class TestAsyncConnection:
             assert req.call_args[0][1] == params
 
     @pytest.mark.asyncio
-    async def test_rate_limited_scan(self):
+    async def test_rate_limited_scan(self, client_session_fixture):
         """
         AsyncConnection.rate_limited_scan
         """
-        conn = AsyncConnection()
+        conn = client_session_fixture
         table_name = 'Thread'
         SCAN_METHOD_TO_PATCH = 'inpynamodb.connection.AsyncConnection.scan'
 
@@ -1834,11 +1868,11 @@ class TestAsyncConnection:
                                   limit=4)
 
     @pytest.mark.asyncio
-    async def test_scan(self):
+    async def test_scan(self, client_session_fixture):
         """
         AsyncConnection.scan
         """
-        conn = AsyncConnection()
+        conn = client_session_fixture
         table_name = 'Thread'
 
         with patch(PATCH_METHOD) as req:
@@ -2060,8 +2094,9 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch(PATCH_METHOD)
     @pytest.mark.asyncio
-    async def test_ratelimited_scan_retries_on_throttling(self, api_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_ratelimited_scan_retries_on_throttling(self, api_mock, sleep_mock, time_mock,
+                                                          client_session_fixture):
+        c = client_session_fixture
         time_mock.side_effect = [1, 2, 3, 4, 5]
 
         botocore_expected_format = {'Error': {'Message': 'm', 'Code': 'ProvisionedThroughputExceededException'}}
@@ -2080,8 +2115,9 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch(PATCH_METHOD)
     @pytest.mark.asyncio
-    async def test_ratelimited_scan_exception_on_max_threshold(self, api_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_ratelimited_scan_exception_on_max_threshold(self, api_mock, sleep_mock, time_mock,
+                                                               client_session_fixture):
+        c = client_session_fixture
         time_mock.side_effect = [1, 2, 3, 4, 5]
         botocore_expected_format = {'Error': {'Message': 'm', 'Code': 'ProvisionedThroughputExceededException'}}
 
@@ -2098,8 +2134,8 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch(PATCH_METHOD)
     @pytest.mark.asyncio
-    async def test_ratelimited_scan_raises_other_client_errors(self, api_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_ratelimited_scan_raises_other_client_errors(self, api_mock, sleep_mock, client_session_fixture):
+        c = client_session_fixture
         botocore_expected_format = {'Error': {'Message': 'm', 'Code': 'ConditionCheckFailedException'}}
 
         api_mock.side_effect = VerboseClientError(botocore_expected_format, 'operation_name', {})
@@ -2115,8 +2151,8 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch(PATCH_METHOD)
     @pytest.mark.asyncio
-    async def test_ratelimited_scan_raises_non_client_error(self, api_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_ratelimited_scan_raises_non_client_error(self, api_mock, sleep_mock, client_session_fixture):
+        c = client_session_fixture
 
         api_mock.side_effect = ScanError('error')
 
@@ -2131,8 +2167,9 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch('inpynamodb.connection.AsyncConnection.scan')
     @pytest.mark.asyncio
-    async def test_rate_limited_scan_retries_on_rate_unavailable(self, scan_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_rate_limited_scan_retries_on_rate_unavailable(self, scan_mock, sleep_mock, time_mock,
+                                                                 client_session_fixture):
+        c = client_session_fixture
         sleep_mock.return_value = 1
         time_mock.side_effect = [1, 4, 6, 12]
         scan_mock.side_effect = [
@@ -2152,8 +2189,9 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch('inpynamodb.connection.AsyncConnection.scan')
     @pytest.mark.asyncio
-    async def test_rate_limited_scan_retries_on_rate_unavailable_within_s(self, scan_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_rate_limited_scan_retries_on_rate_unavailable_within_s(self, scan_mock, sleep_mock, time_mock,
+                                                                          client_session_fixture):
+        c = client_session_fixture
         sleep_mock.return_value = 1
         time_mock.side_effect = [1.0, 1.5, 4.0]
         scan_mock.side_effect = [
@@ -2172,8 +2210,9 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch('inpynamodb.connection.AsyncConnection.scan')
     @pytest.mark.asyncio
-    async def test_rate_limited_scan_retries_max_sleep(self, scan_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_rate_limited_scan_retries_max_sleep(self, scan_mock, sleep_mock, time_mock,
+                                                       client_session_fixture):
+        c = client_session_fixture
         sleep_mock.return_value = 1
         time_mock.side_effect = [1.0, 1.5, 250, 350]
         scan_mock.side_effect = [
@@ -2196,8 +2235,8 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch('inpynamodb.connection.AsyncConnection.scan')
     @pytest.mark.asyncio
-    async def test_rate_limited_scan_retries_min_sleep(self, scan_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_rate_limited_scan_retries_min_sleep(self, scan_mock, sleep_mock, time_mock, client_session_fixture):
+        c = client_session_fixture
         sleep_mock.return_value = 1
         time_mock.side_effect = [1, 2, 3, 4]
         scan_mock.side_effect = [
@@ -2217,8 +2256,8 @@ class TestAsyncConnection:
     @mock.patch('asyncio.sleep')
     @mock.patch('inpynamodb.connection.AsyncConnection.scan')
     @pytest.mark.asyncio
-    async def test_rate_limited_scan_retries_timeout(self, scan_mock, sleep_mock, time_mock):
-        c = AsyncConnection()
+    async def test_rate_limited_scan_retries_timeout(self, scan_mock, sleep_mock, time_mock, client_session_fixture):
+        c = client_session_fixture
         sleep_mock.return_value = 1
         time_mock.side_effect = [1, 20, 30, 40]
         scan_mock.side_effect = [

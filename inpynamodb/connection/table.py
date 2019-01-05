@@ -303,3 +303,6 @@ class TableConnection(object):
             local_secondary_indexes=local_secondary_indexes,
             stream_specification=stream_specification
         )
+
+    async def close_connection(self):
+        await self.connection.close()

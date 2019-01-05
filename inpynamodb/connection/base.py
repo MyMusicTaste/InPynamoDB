@@ -60,6 +60,10 @@ class AsyncConnection(Connection):
     def __repr__(self):
         return f"AsyncConnection<{self.client.meta.endpoint_url}>"
 
+    async def close(self):
+        if self.requests_session is not None and not self.requests_session.closed:
+            await self.requests_session.close()
+
     async def _create_prepared_request(self, request_dict, operation_model):
         """
         Create a prepared request object from request_dict, and operation_model

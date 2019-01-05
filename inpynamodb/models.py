@@ -197,6 +197,10 @@ class Model(PynamoDBModel, metaclass=MetaModel):
 
         return await cls(hash_key=hash_key, range_key=range_key, **attributes).__aenter__()
 
+    @classmethod
+    async def close_connection(cls):
+        await cls._get_connection().close_connection()
+
     async def __aenter__(self):
         if self._hash_key is not None:
             self._attributes[self._dynamo_to_python_attr((await self._get_meta_data()).hash_keyname)] = self._hash_key
