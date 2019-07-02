@@ -232,11 +232,11 @@ class AsyncConnection(Connection):
         """
         Return a requests session to execute prepared requests using the same pool
         """
-        if self._requests_session is None:
-            self._requests_session = self.session_cls()
 
-        # Check if loop is closed
-        if not self._requests_session._loop.is_running():
+        if self._requests_session is None or \
+                self._requests_session.closed or \
+                not self._requests_session._loop.is_running() or \
+                self._requests_session._loop.is_closed():
             self._requests_session = self.session_cls()
 
         return self._requests_session
@@ -1141,3 +1141,7 @@ class AsyncConnection(Connection):
             for value in values
         ]
         return getattr(Path([attribute_name]), operator)(*values)
+
+    async def close(self):
+        if self._requests_session:
+            await self._requests_session.close()

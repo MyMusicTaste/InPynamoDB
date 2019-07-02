@@ -222,7 +222,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
             await self.save()
 
     @classmethod
-    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None, return_consumed_capacity=None):
+    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None, return_consumed_capacity=None,
+                        return_raw_data=False):
         """
         BatchGetItem for this model
 
@@ -243,7 +244,10 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                         return_consumed_capacity=return_consumed_capacity
                     )
                     for batch_item in page:
-                        yield (await cls.from_raw_data(batch_item))
+                        if return_raw_data:
+                            yield batch_item
+                        else:
+                            yield (await cls.from_raw_data(batch_item))
                     if unprocessed_keys:
                         keys_to_get = unprocessed_keys
                     else:
@@ -268,7 +272,10 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                 attributes_to_get=attributes_to_get
             )
             for batch_item in page:
-                yield (await cls.from_raw_data(batch_item))
+                if return_raw_data:
+                    yield batch_item
+                else:
+                    yield (await cls.from_raw_data(batch_item))
             if unprocessed_keys:
                 keys_to_get = unprocessed_keys
             else:
@@ -817,7 +824,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                   hash_key,
                   range_key=None,
                   consistent_read=False,
-                  attributes_to_get=None):
+                  attributes_to_get=None,
+                  return_raw_data=False):
         """
         Returns a single object using the provided keys
 
@@ -834,7 +842,10 @@ class Model(PynamoDBModel, metaclass=MetaModel):
         if data:
             item_data = data.get(ITEM)
             if item_data:
-                return await cls.from_raw_data(item_data)
+                if return_raw_data:
+                    return item_data
+                else:
+                    return await cls.from_raw_data(item_data)
         raise cls.DoesNotExist()
 
     @classmethod

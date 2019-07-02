@@ -135,7 +135,7 @@ class PageIterator(object):
             return self._last_evaluated_key.keys()
 
         # Use the table meta data to determine the key attributes
-        table_meta = self._operation.im_self.get_meta_table()
+        table_meta = self._operation.__self__.get_meta_table()
         return table_meta.get_key_names(self._kwargs.get('index_name'))
 
     @property
