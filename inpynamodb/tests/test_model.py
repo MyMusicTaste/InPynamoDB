@@ -2154,7 +2154,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 25)
             self.assertEqual(req.mock_calls[1][1][1]['Limit'], 25)
             self.assertEqual(req.mock_calls[2][1][1]['Limit'], 25)
-            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(await results_iter.get_last_evaluated_key(), {'user_id': items[24]['user_id']})
             self.assertEqual(results_iter.total_count, 30)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
@@ -2183,7 +2183,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(await results_iter.get_last_evaluated_key(), {'user_id': items[24]['user_id']})
             self.assertEqual(results_iter.total_count, 30)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
@@ -2212,7 +2212,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 50)
             self.assertEqual(req.mock_calls[1][1][1]['Limit'], 50)
             self.assertEqual(req.mock_calls[2][1][1]['Limit'], 50)
-            self.assertEqual(results_iter.last_evaluated_key, None)
+            self.assertEqual(await results_iter.get_last_evaluated_key(), None)
             self.assertEqual(results_iter.total_count, 30)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
@@ -2241,7 +2241,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEqual(results_iter.last_evaluated_key, None)
+            self.assertEqual(await results_iter.get_last_evaluated_key(), None)
             self.assertEqual(results_iter.total_count, 30)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 
@@ -2269,7 +2269,7 @@ class ModelTestCase(TestCase):
             Newly async generator style ResultIterator has no value before starting iterating.
             So ResultIterator does not have initial value if just initialized.
             
-            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[9]['user_id']})
+            self.assertEqual(await results_iter.get_last_evaluated_key(), {'user_id': items[9]['user_id']})
             
             So this test cannot be True.
             """
@@ -2278,7 +2278,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(len(results), 10)
             self.assertEqual(len(req.mock_calls), 1)
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
-            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[19]['user_id']})
+            self.assertEqual(await results_iter.get_last_evaluated_key(), {'user_id': items[19]['user_id']})
             self.assertEqual(results_iter.total_count, 10)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 10)
 
@@ -2617,7 +2617,7 @@ class ModelTestCase(TestCase):
             self.assertEqual(req.mock_calls[0][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[1][1][1]['Limit'], 10)
             self.assertEqual(req.mock_calls[2][1][1]['Limit'], 10)
-            self.assertEqual(results_iter.last_evaluated_key, {'user_id': items[24]['user_id']})
+            self.assertEqual(await results_iter.get_last_evaluated_key(), {'user_id': items[24]['user_id']})
             self.assertEqual(results_iter.total_count, 30)
             self.assertEqual(results_iter.page_iter.total_scanned_count, 60)
 

@@ -1,3 +1,2 @@
-aiobotocore==0.9.2
 pynamodb==3.3.0
-boto3==1.7.12
+aiobotocore==0.10.2

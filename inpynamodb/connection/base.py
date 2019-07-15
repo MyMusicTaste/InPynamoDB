@@ -144,6 +144,10 @@ class AsyncConnection(Connection):
 
             response = None
             try:
+                proxies = getattr(self.client._endpoint, "proxies", None)
+                if proxies is None:
+                    proxies = self.client._endpoint.http_session._proxy_config._proxies
+
                 async with await self._create_prepared_request(request_dict, operation_model) as response:
                     data = json.loads(await response.text(encoding='utf-8'))
 

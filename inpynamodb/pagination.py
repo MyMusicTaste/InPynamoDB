@@ -128,14 +128,13 @@ class PageIterator(object):
 
         return page
 
-    @property
-    def key_names(self):
+    async def key_names(self):
         # If the current page has a last_evaluated_key, use it to determine key attributes
         if self._last_evaluated_key:
             return self._last_evaluated_key.keys()
 
         # Use the table meta data to determine the key attributes
-        table_meta = self._operation.__self__.get_meta_table()
+        table_meta = await self._operation.__self__.get_meta_table()
         return table_meta.get_key_names(self._kwargs.get('index_name'))
 
     @property
@@ -202,8 +201,7 @@ class ResultIterator(object):
                 item = self._map_fn(item)
         return item
 
-    @property
-    def last_evaluated_key(self):
+    async def get_last_evaluated_key(self):
         if self._first_iteration:
             # Not started iterating yet: there cannot be a last_evaluated_key
             return None
@@ -217,7 +215,7 @@ class ResultIterator(object):
         # The operation should be resumed starting at the last item returned, not the last item evaluated.
         # This can occur if the 'limit' is reached in the middle of a page.
         item = self._items[self._index - 1]
-        return dict((key, item[key]) for key in self.page_iter.key_names)
+        return dict((key, item[key]) for key in await self.page_iter.key_names())
 
     @property
     def total_count(self):
