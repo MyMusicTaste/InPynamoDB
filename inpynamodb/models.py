@@ -492,6 +492,10 @@ class Model(PynamoDBModel, metaclass=MetaModel):
             return False
 
     @classmethod
+    async def describe_table(cls):
+        return await cls._get_connection().describe_table()
+
+    @classmethod
     async def create_table(cls, wait=False, read_capacity_units=None, write_capacity_units=None):
         """
         Create the table for this model
