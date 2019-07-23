@@ -820,7 +820,8 @@ class Model(PynamoDBModel, metaclass=MetaModel):
                                               max_retry_attempts=cls.Meta.max_retry_attempts,
                                               base_backoff_ms=cls.Meta.base_backoff_ms,
                                               aws_access_key_id=cls.Meta.aws_access_key_id,
-                                              aws_secret_access_key=cls.Meta.aws_secret_access_key)
+                                              aws_secret_access_key=cls.Meta.aws_secret_access_key,
+                                              aws_session_token=getattr(cls.Meta, 'aws_session_token', None))
         return cls._connection
 
     @classmethod
