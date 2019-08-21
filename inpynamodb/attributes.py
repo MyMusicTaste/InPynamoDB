@@ -79,7 +79,7 @@ class AttributeContainer(_AttributeContainer, metaclass=AttributeContainerMeta):
 
 class UUIDAttribute(UnicodeAttribute):
     def __init__(self, hash_key=False, range_key=False, null=None, defaultable=True,
-                 default=None, uuid_version=1, attr_name=None):
+                 default=None, uuid_version=1, attr_name=None, store_hex=False):
         """
         :param hash_key: Indicates that this attribute is hash key of model.
         :param range_key: Indicates that this attribute is range key of model.
@@ -87,15 +87,17 @@ class UUIDAttribute(UnicodeAttribute):
         :param default: Default value of this attribute.
                         If auto == True, this value will be ignored because UUID will be generated as default.
         :param uuid_version: UUID version which this attribute will use. Only supports 1 and 4.
+        :param store_hex: If true, store uuid in hex form
         """
         self.uuid_version = uuid_version
+        self.store_hex = store_hex
 
         super(UUIDAttribute, self).__init__(hash_key=hash_key, range_key=range_key, defaultable=defaultable,
                                             null=null, default=default, attr_name=attr_name)
 
     def serialize(self, value):
         if isinstance(value, uuid.UUID):
-            value_str = str(value)
+            value_str = value.hex if self.store_hex else str(value) 
             try:
                 uuid.UUID(value_str, version=self.uuid_version)
                 return super(UUIDAttribute, self).serialize(value_str)
