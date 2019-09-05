@@ -1,7 +1,7 @@
 """
 Mock response
 """
-from aiohttp.web_response import Response
+from requests.models import Response
 
 
 class MockResponse(Response):
@@ -9,7 +9,10 @@ class MockResponse(Response):
     A class for mocked responses
     """
     def __init__(self, status_code=None, content='Empty'):
-        super(MockResponse, self).__init__(status=status_code, text=content, reason='Test Response')
+        super(MockResponse, self).__init__()
+        self.status_code = status_code
+        self._content = content
+        self.reason = 'Test Response'
 
 
 class HttpBadRequest(MockResponse):

@@ -2,7 +2,7 @@ import pytest
 from pynamodb.pagination import RateLimiter
 
 
-class MockTime:
+class MockTime():
     def __init__(self):
         self.current_time = 0.0
 

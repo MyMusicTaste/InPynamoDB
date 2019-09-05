@@ -1,26 +1,30 @@
 """
 pynamodb attributes tests
 """
-import asyncio
 import json
+import six
+import time
 
 from base64 import b64encode
 from datetime import datetime
 
+from datetime import timedelta
 from dateutil.tz import tzutc
 
-from mock import patch, call
+from mock import patch, Mock, call
 import pytest
-
-from pynamodb.constants import UTC, DATETIME_FORMAT
-from inpynamodb.models import Model
 
 from pynamodb.attributes import (
     BinarySetAttribute, BinaryAttribute, NumberSetAttribute, NumberAttribute,
-    UnicodeAttribute, UnicodeSetAttribute, UTCDateTimeAttribute, BooleanAttribute, LegacyBooleanAttribute,
-    MapAttribute, MapAttributeMeta, ListAttribute,
-    JSONAttribute, DEFAULT_ENCODING, NUMBER, STRING, STRING_SET, NUMBER_SET, BINARY_SET,
-    BINARY, BOOLEAN, _get_value_for_deserialize)
+    UnicodeAttribute, UnicodeSetAttribute, UTCDateTimeAttribute, BooleanAttribute, MapAttribute,
+    ListAttribute, JSONAttribute, TTLAttribute, _get_value_for_deserialize, _fast_parse_utc_datestring,
+    VersionAttribute)
+from pynamodb.constants import (
+    DATETIME_FORMAT, DEFAULT_ENCODING, NUMBER, STRING, STRING_SET, NUMBER_SET, BINARY_SET,
+    BINARY, BOOLEAN,
+)
+from pynamodb.models import Model
+
 
 UTC = tzutc()
 
@@ -41,6 +45,7 @@ class AttributeTestModel(Model):
     bool_attr = BooleanAttribute()
     json_attr = JSONAttribute()
     map_attr = MapAttribute()
+    ttl_attr = TTLAttribute()
 
 
 class CustomAttrMap(MapAttribute):
@@ -58,14 +63,12 @@ class TestAttributeDescriptor:
     Test Attribute Descriptors
     """
     def setup(self):
-        loop = asyncio.get_event_loop()
-        self.instance = loop.run_until_complete(AttributeTestModel().__aenter__())
+        self.instance = AttributeTestModel()
 
     def test_binary_attr(self):
         """
         Binary attribute descriptor
         """
-
         self.instance.binary_attr = b'test'
         assert self.instance.binary_attr == b'test'
 
@@ -94,15 +97,15 @@ class TestAttributeDescriptor:
         """
         Unicode attribute descriptor
         """
-        self.instance.unicode_attr = "test"
-        assert self.instance.unicode_attr == "test"
+        self.instance.unicode_attr = u"test"
+        assert self.instance.unicode_attr == u"test"
 
     def test_unicode_set_attr(self):
         """
         Unicode set attribute descriptor
         """
-        self.instance.unicode_set_attr = {"test", "test2"}
-        assert self.instance.unicode_set_attr == {"test", "test2"}
+        self.instance.unicode_set_attr = {u"test", u"test2"}
+        assert self.instance.unicode_set_attr == {u"test", u"test2"}
 
     def test_datetime_attr(self):
         """
@@ -171,7 +174,7 @@ class TestUTCDateTimeAttribute:
         attr.deserialize(tstamp_str)
 
         parse_mock.assert_not_called()
-        datetime_mock.strptime.assert_called_once_with(tstamp_str, DATETIME_FORMAT)
+        datetime_mock.strptime.assert_not_called()
 
     def test_utc_date_time_serialize(self):
         """
@@ -180,6 +183,38 @@ class TestUTCDateTimeAttribute:
         tstamp = datetime.now()
         attr = UTCDateTimeAttribute()
         assert attr.serialize(tstamp) == tstamp.replace(tzinfo=UTC).strftime(DATETIME_FORMAT)
+
+    def test__fast_parse_utc_datestring_roundtrips(self):
+        tstamp = datetime.now(UTC)
+        tstamp_str = tstamp.strftime(DATETIME_FORMAT)
+        assert _fast_parse_utc_datestring(tstamp_str) == tstamp
+
+    def test__fast_parse_utc_datestring_no_microseconds(self):
+        expected_value = datetime(2047, 1, 6, 8, 21, tzinfo=tzutc())
+        assert _fast_parse_utc_datestring('2047-01-06T08:21:00.0+0000') == expected_value
+
+    @pytest.mark.parametrize(
+        "invalid_string",
+        [
+            '2.47-01-06T08:21:00.0+0000',
+            '2047-01-06T08:21:00.+0000',
+            '2047-01-06T08:21:00.0',
+            '2047-01-06 08:21:00.0+0000',
+            'abcd-01-06T08:21:00.0+0000',
+            '2047-ab-06T08:21:00.0+0000',
+            '2047-01-abT08:21:00.0+0000',
+            '2047-01-06Tab:21:00.0+0000',
+            '2047-01-06T08:ab:00.0+0000',
+            '2047-01-06T08:ab:00.0+0000',
+            '2047-01-06T08:21:00.a+0000',
+            '2047-01-06T08:21:00.0.1+0000',
+            '2047-01-06T08:21:00.0+00000'
+        ]
+    )
+    def test__fast_parse_utc_datestring_invalid_input(self, invalid_string):
+        with pytest.raises(ValueError, match="does not match format"):
+            _fast_parse_utc_datestring(invalid_string)
+
 
 
 class TestBinaryAttribute:
@@ -335,16 +370,16 @@ class TestUnicodeAttribute:
         assert attr is not None
         assert attr.attr_type == STRING
 
-        attr = UnicodeAttribute(default='foo')
-        assert attr.default == 'foo'
+        attr = UnicodeAttribute(default=six.u('foo'))
+        assert attr.default == six.u('foo')
 
     def test_unicode_serialize(self):
         """
         UnicodeAttribute.serialize
         """
         attr = UnicodeAttribute()
-        assert attr.serialize('foo') == 'foo'
-        assert attr.serialize(u'foo') == 'foo'
+        assert attr.serialize('foo') == six.u('foo')
+        assert attr.serialize(u'foo') == six.u('foo')
         assert attr.serialize(u'') is None
         assert attr.serialize(None) is None
 
@@ -353,8 +388,8 @@ class TestUnicodeAttribute:
         UnicodeAttribute.deserialize
         """
         attr = UnicodeAttribute()
-        assert attr.deserialize('foo') == 'foo'
-        assert attr.deserialize(u'foo') == 'foo'
+        assert attr.deserialize('foo') == six.u('foo')
+        assert attr.deserialize(u'foo') == six.u('foo')
 
     def test_unicode_set_serialize(self):
         """
@@ -364,30 +399,30 @@ class TestUnicodeAttribute:
         assert attr.attr_type == STRING_SET
         assert attr.deserialize(None) is None
 
-        expected = sorted(['foo', 'bar'])
-        assert attr.serialize({'foo', 'bar'}) == expected
+        expected = sorted([six.u('foo'), six.u('bar')])
+        assert attr.serialize({six.u('foo'), six.u('bar')}) == expected
 
-        expected = sorted(['True', 'False'])
-        assert attr.serialize({'True', 'False'}) == expected
+        expected = sorted([six.u('True'), six.u('False')])
+        assert attr.serialize({six.u('True'), six.u('False')}) == expected
 
-        expected = sorted(['true', 'false'])
-        assert attr.serialize({'true', 'false'}) == expected
+        expected = sorted([six.u('true'), six.u('false')])
+        assert attr.serialize({six.u('true'), six.u('false')}) == expected
 
     def test_round_trip_unicode_set(self):
         """
         Round trip a unicode set
         """
         attr = UnicodeSetAttribute()
-        orig = {'foo', 'bar'}
+        orig = {six.u('foo'), six.u('bar')}
         assert orig == attr.deserialize(attr.serialize(orig))
 
-        orig = {'true', 'false'}
+        orig = {six.u('true'), six.u('false')}
         assert orig == attr.deserialize(attr.serialize(orig))
 
-        orig = {'1', '2.8'}
+        orig = {six.u('1'), six.u('2.8')}
         assert orig == attr.deserialize(attr.serialize(orig))
 
-        orig = {'[1,2,3]', '2.8'}
+        orig = {six.u('[1,2,3]'), six.u('2.8')}
         assert orig == attr.deserialize(attr.serialize(orig))
 
     def test_unicode_set_deserialize(self):
@@ -395,16 +430,16 @@ class TestUnicodeAttribute:
         UnicodeSetAttribute.deserialize
         """
         attr = UnicodeSetAttribute()
-        value = {'foo', 'bar'}
+        value = {six.u('foo'), six.u('bar')}
         assert attr.deserialize(value) == value
 
-        value = {'True', 'False'}
+        value = {six.u('True'), six.u('False')}
         assert attr.deserialize(value) == value
 
-        value = {'true', 'false'}
+        value = {six.u('true'), six.u('false')}
         assert attr.deserialize(value) == value
 
-        value = {'1', '2.8'}
+        value = {six.u('1'), six.u('2.8')}
         assert attr.deserialize(value) == value
 
     def test_unicode_set_attribute(self):
@@ -414,48 +449,8 @@ class TestUnicodeAttribute:
         attr = UnicodeSetAttribute()
         assert attr is not None
         assert attr.attr_type == STRING_SET
-        attr = UnicodeSetAttribute(default={'foo', 'bar'})
-        assert attr.default == {'foo', 'bar'}
-
-
-class TestLegacyBooleanAttribute:
-    def test_legacy_boolean_attribute_can_read_future_boolean_attributes(self):
-        """
-        LegacyBooleanAttribute.deserialize
-        :return:
-        """
-        attr = LegacyBooleanAttribute()
-        assert attr.deserialize('1') is True
-        assert attr.deserialize('0') is False
-        assert attr.deserialize(json.dumps(True)) is True
-        assert attr.deserialize(json.dumps(False)) is False
-
-    def test_legacy_boolean_attribute_get_value_can_read_both(self):
-        """
-        LegacyBooleanAttribute.get_value
-        :return:
-        """
-        attr = LegacyBooleanAttribute()
-        assert attr.get_value({'N': '1'}) == '1'
-        assert attr.get_value({'N': '0'}) == '0'
-        assert attr.get_value({'BOOL': True}) == json.dumps(True)
-        assert attr.get_value({'BOOL': False}) == json.dumps(False)
-
-    def test_legacy_boolean_attribute_get_value_and_deserialize_work_together(self):
-        attr = LegacyBooleanAttribute()
-        assert attr.deserialize(attr.get_value({'N': '1'})) is True
-        assert attr.deserialize(attr.get_value({'N': '0'})) is False
-        assert attr.deserialize(attr.get_value({'BOOL': True})) is True
-        assert attr.deserialize(attr.get_value({'BOOL': False})) is False
-
-    def test_legacy_boolean_attribute_serialize(self):
-        """
-        LegacyBooleanAttribute.serialize
-        """
-        attr = LegacyBooleanAttribute()
-        assert attr.serialize(True) == '1'
-        assert attr.serialize(False) == '0'
-        assert attr.serialize(None) is None
+        attr = UnicodeSetAttribute(default={six.u('foo'), six.u('bar')})
+        assert attr.default == {six.u('foo'), six.u('bar')}
 
 
 class TestBooleanAttribute:
@@ -487,10 +482,61 @@ class TestBooleanAttribute:
         BooleanAttribute.deserialize
         """
         attr = BooleanAttribute()
-        assert attr.deserialize('1') is True
-        assert attr.deserialize('0') is True
         assert attr.deserialize(True) is True
         assert attr.deserialize(False) is False
+
+
+class TestTTLAttribute:
+    """
+    Test TTLAttribute.
+    """
+    def test_default_and_default_for_new(self):
+        with pytest.raises(ValueError, match='An attribute cannot have both default and default_for_new parameters'):
+            TTLAttribute(default=timedelta(seconds=1), default_for_new=timedelta(seconds=2))
+
+    @patch('time.time')
+    def test_timedelta_ttl(self, mock_time):
+        mock_time.side_effect = [1559692800]  # 2019-06-05 00:00:00 UTC
+        model = AttributeTestModel()
+        model.ttl_attr = timedelta(seconds=60)
+        assert model.ttl_attr == datetime(2019, 6, 5, 0, 1, tzinfo=UTC)
+
+    def test_datetime_naive_ttl(self):
+        model = AttributeTestModel()
+        with pytest.raises(ValueError, match='timezone-aware'):
+            model.ttl_attr = datetime(2019, 6, 5, 0, 1)
+        assert model.ttl_attr is None
+
+    def test_datetime_with_tz_ttl(self):
+        model = AttributeTestModel()
+        model.ttl_attr = datetime(2019, 6, 5, 0, 1, tzinfo=UTC)
+        assert model.ttl_attr == datetime(2019, 6, 5, 0, 1, tzinfo=UTC)
+
+    def test_ttl_attribute_wrong_type(self):
+        with pytest.raises(ValueError, match='TTLAttribute value must be a timedelta or datetime'):
+            model = AttributeTestModel()
+            model.ttl_attr = 'wrong type'
+
+    @patch('time.time')
+    def test_serialize_timedelta(self, mock_time):
+        mock_time.side_effect = [1559692800]  # 2019-06-05 00:00:00 UTC
+        assert TTLAttribute().serialize(timedelta(seconds=60)) == str(1559692800 + 60)
+
+    def test_serialize_none(self):
+        model = AttributeTestModel()
+        model.ttl_attr = None
+        assert model.ttl_attr == None
+        assert TTLAttribute().serialize(model.ttl_attr) == None
+
+    @patch('time.time')
+    def test_serialize_deserialize(self, mock_time):
+        mock_time.side_effect = [1559692800, 1559692800]  # 2019-06-05 00:00:00 UTC
+        model = AttributeTestModel()
+        model.ttl_attr = timedelta(minutes=1)
+        assert model.ttl_attr == datetime(2019, 6, 5, 0, 1, tzinfo=UTC)
+        s = TTLAttribute().serialize(model.ttl_attr)
+        assert s == '1559692860'
+        assert TTLAttribute().deserialize(s) == datetime(2019, 6, 5, 0, 1, 0, tzinfo=UTC)
 
 
 class TestJSONAttribute:
@@ -522,8 +568,8 @@ class TestJSONAttribute:
         """
         attr = JSONAttribute()
         item = {'foo': 'bar', 'bool': True, 'number': 3.141}
-        assert attr.serialize(item) == (json.dumps(item))
-        assert attr.serialize({}) == '{}'
+        assert attr.serialize(item) == six.u(json.dumps(item))
+        assert attr.serialize({}) == six.u('{}')
         assert attr.serialize(None) is None
 
     def test_json_deserialize(self):
@@ -532,7 +578,7 @@ class TestJSONAttribute:
         """
         attr = JSONAttribute()
         item = {'foo': 'bar', 'bool': True, 'number': 3.141}
-        encoded = (json.dumps(item))
+        encoded = six.u(json.dumps(item))
         assert attr.deserialize(encoded) == item
 
     def test_control_chars(self):
@@ -541,7 +587,7 @@ class TestJSONAttribute:
         """
         attr = JSONAttribute()
         item = {'foo\t': 'bar\n', 'bool': True, 'number': 3.141}
-        encoded = (json.dumps(item))
+        encoded = six.u(json.dumps(item))
         assert attr.deserialize(encoded) == item
 
 
@@ -610,7 +656,7 @@ class TestMapAttribute:
             'overridden_number_attr': 10,
             'overridden_unicode_attr': "Hello"
         }
-        expected = {'number_attr': {'N': '10'}, 'unicode_attr': {'S': 'Hello'}}
+        expected = {'number_attr': {'N': '10'}, 'unicode_attr': {'S': six.u('Hello')}}
         assert CustomAttrMap().serialize(attribute) == expected
 
     def test_additional_attrs_deserialize(self):
@@ -618,10 +664,10 @@ class TestMapAttribute:
             'number_attr': {
                 'N': '10'},
             'unicode_attr': {
-                'S': 'Hello'
+                'S': six.u('Hello')
             },
             'undeclared_attr': {
-                'S': 'Goodbye'
+                'S': six.u('Goodbye')
             }
         }
         expected = {
@@ -639,32 +685,41 @@ class TestMapAttribute:
             }
         }
 
-    @pytest.mark.asyncio
-    async def test_raw_set_attr(self):
-        async with AttributeTestModel() as item:
-            item.map_attr = {}
-            item.map_attr.foo = 'bar'
-            item.map_attr.num = 3
-            item.map_attr.nested = {'nestedfoo': 'nestedbar'}
+    def test_raw_set_attr(self):
+        item = AttributeTestModel()
+        item.map_attr = {}
+        item.map_attr.foo = 'bar'
+        item.map_attr.num = 3
+        item.map_attr.nested = {'nestedfoo': 'nestedbar'}
 
-            assert item.map_attr['foo'] == 'bar'
-            assert item.map_attr['num'] == 3
-            assert item.map_attr['nested']['nestedfoo'] == 'nestedbar'
+        assert item.map_attr['foo'] == 'bar'
+        assert item.map_attr['num'] == 3
+        assert item.map_attr['nested']['nestedfoo'] == 'nestedbar'
 
-    @pytest.mark.asyncio
-    async def test_raw_set_item(self):
-        async with AttributeTestModel() as item:
-            item.map_attr = {'foo': 'bar', 'num': 3, 'nested': {'nestedfoo': 'nestedbar'}}
+    def test_raw_set_item(self):
+        item = AttributeTestModel()
+        item.map_attr = {}
+        item.map_attr['foo'] = 'bar'
+        item.map_attr['num'] = 3
+        item.map_attr['nested'] = {'nestedfoo': 'nestedbar'}
 
-            assert item.map_attr['foo'] == 'bar'
-            assert item.map_attr['num'] == 3
-            assert item.map_attr['nested']['nestedfoo'] == 'nestedbar'
+        assert item.map_attr['foo'] == 'bar'
+        assert item.map_attr['num'] == 3
+        assert item.map_attr['nested']['nestedfoo'] == 'nestedbar'
 
-    @pytest.mark.asyncio
-    async def test_raw_map_from_dict(self):
-        async with AttributeTestModel(map_attr={"foo": "bar","num": 3,"nested": {"nestedfoo": "nestedbar"}}) as item:
-            assert item.map_attr['foo'] == 'bar'
-            assert item.map_attr['num'] == 3
+    def test_raw_map_from_dict(self):
+        item = AttributeTestModel(
+            map_attr={
+                "foo": "bar",
+                "num": 3,
+                "nested": {
+                    "nestedfoo": "nestedbar"
+                }
+            }
+        )
+
+        assert item.map_attr['foo'] == 'bar'
+        assert item.map_attr['num'] == 3
 
     def test_raw_map_access(self):
         raw = {
@@ -676,7 +731,7 @@ class TestMapAttribute:
         }
         attr = MapAttribute(**raw)
 
-        for k, v in raw.items():
+        for k, v in six.iteritems(raw):
             assert attr[k] == v
 
     def test_raw_map_iter(self):
@@ -691,8 +746,7 @@ class TestMapAttribute:
 
         assert list(iter(raw)) == list(iter(attr))
 
-    @pytest.mark.asyncio
-    async def test_raw_map_json_serialize(self):
+    def test_raw_map_json_serialize(self):
         raw = {
             "foo": "bar",
             "num": 3,
@@ -702,28 +756,28 @@ class TestMapAttribute:
         }
 
         serialized_raw = json.dumps(raw, sort_keys=True)
-        async with AttributeTestModel(map_attr=raw) as item:
-            serialized_attr_from_raw = json.dumps(
-                item.map_attr.as_dict(),
-                sort_keys=True)
-        async with AttributeTestModel(map_attr=MapAttribute(**raw)) as item:
-            serialized_attr_from_map = json.dumps(
-                item.map_attr.as_dict(),
-                sort_keys=True)
+        serialized_attr_from_raw = json.dumps(
+            AttributeTestModel(map_attr=raw).map_attr.as_dict(),
+            sort_keys=True)
+        serialized_attr_from_map = json.dumps(
+            AttributeTestModel(map_attr=MapAttribute(**raw)).map_attr.as_dict(),
+            sort_keys=True)
 
         assert serialized_attr_from_raw == serialized_raw
         assert serialized_attr_from_map == serialized_raw
 
-    @pytest.mark.asyncio
-    async def test_typed_and_raw_map_json_serialize(self):
+    def test_typed_and_raw_map_json_serialize(self):
         class TypedMap(MapAttribute):
             map_attr = MapAttribute()
 
         class SomeModel(Model):
             typed_map = TypedMap()
 
-        async with SomeModel(typed_map=TypedMap(map_attr={'foo': "bar"})) as item:
-            assert json.dumps({'map_attr': {'foo': 'bar'}}) == json.dumps(item.typed_map.as_dict())
+        item = SomeModel(
+            typed_map=TypedMap(map_attr={'foo': 'bar'})
+        )
+
+        assert json.dumps({'map_attr': {'foo': 'bar'}}) == json.dumps(item.typed_map.as_dict())
 
     def test_json_serialize(self):
         class JSONMapAttribute(MapAttribute):
@@ -753,8 +807,7 @@ class TestMapAttribute:
         }
         assert serialized_datetime == expected_serialized_value
 
-    @pytest.mark.asyncio
-    async def test_complex_map_accessors(self):
+    def test_complex_map_accessors(self):
         class NestedThing(MapAttribute):
             double_nested = MapAttribute()
             double_nested_renamed = MapAttribute(attr_name='something_else')
@@ -762,16 +815,19 @@ class TestMapAttribute:
         class ThingModel(Model):
             nested = NestedThing()
 
-        async with ThingModel(nested=NestedThing(double_nested={'hello': 'world'},
-                                                 double_nested_renamed={'foo': 'bar'})) as t:
-            assert t.nested.double_nested.as_dict() == {'hello': 'world'}
-            assert t.nested.double_nested_renamed.as_dict() == {'foo': 'bar'}
-            assert t.nested.double_nested.hello == 'world'
-            assert t.nested.double_nested_renamed.foo == 'bar'
-            assert t.nested['double_nested'].as_dict() == {'hello': 'world'}
-            assert t.nested['double_nested_renamed'].as_dict() == {'foo': 'bar'}
-            assert t.nested['double_nested']['hello'] == 'world'
-            assert t.nested['double_nested_renamed']['foo'] == 'bar'
+        t = ThingModel(nested=NestedThing(
+            double_nested={'hello': 'world'},
+            double_nested_renamed={'foo': 'bar'})
+        )
+
+        assert t.nested.double_nested.as_dict() == {'hello': 'world'}
+        assert t.nested.double_nested_renamed.as_dict() == {'foo': 'bar'}
+        assert t.nested.double_nested.hello == 'world'
+        assert t.nested.double_nested_renamed.foo == 'bar'
+        assert t.nested['double_nested'].as_dict() == {'hello': 'world'}
+        assert t.nested['double_nested_renamed'].as_dict() == {'foo': 'bar'}
+        assert t.nested['double_nested']['hello'] == 'world'
+        assert t.nested['double_nested_renamed']['foo'] == 'bar'
 
         with pytest.raises(AttributeError):
             bad = t.nested.double_nested.bad
@@ -783,9 +839,6 @@ class TestMapAttribute:
             bad = t.nested.double_nested['bad']
         with pytest.raises(KeyError):
             bad = t.nested['something_else']
-
-    def test_metaclass(self):
-        assert type(MapAttribute) == MapAttributeMeta
 
     def test_attribute_paths_subclassing(self):
         class SubMapAttribute(MapAttribute):
@@ -951,3 +1004,18 @@ class TestMapAndListAttribute:
         assert deserialized == inp
         assert serialize_mock.call_args_list == [call(1), call(2)]
         assert deserialize_mock.call_args_list == [call('1'), call('2')]
+
+
+class TestVersionAttribute:
+    def test_serialize(self):
+        attr = VersionAttribute()
+        assert attr.attr_type == NUMBER
+        assert attr.serialize(3.141) == '3'
+        assert attr.serialize(1) == '1'
+        assert attr.serialize(12345678909876543211234234324234) == '12345678909876543211234234324234'
+
+    def test_deserialize(self):
+        attr = VersionAttribute()
+        assert attr.deserialize('1') == 1
+        assert attr.deserialize('3.141') == 3
+        assert attr.deserialize('12345678909876543211234234324234') == 12345678909876543211234234324234

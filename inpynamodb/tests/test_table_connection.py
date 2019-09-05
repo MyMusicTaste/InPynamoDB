@@ -1,16 +1,21 @@
 """
 Test suite for the table class
 """
-import pytest
+import six
+from unittest import TestCase
 
-from inpynamodb.connection import TableConnection
-from inpynamodb.tests.response import HttpOK
-from asynctest import TestCase, patch
-from pynamodb.constants import DEFAULT_REGION
+from pynamodb.connection import TableConnection
+from pynamodb.constants import DEFAULT_REGION, PROVISIONED_BILLING_MODE
 from pynamodb.expressions.operand import Path
-from pynamodb.tests.data import DESCRIBE_TABLE_DATA, GET_ITEM_DATA
+from .data import DESCRIBE_TABLE_DATA, GET_ITEM_DATA
+from .response import HttpOK
 
-PATCH_METHOD = 'inpynamodb.connection.AsyncConnection._make_api_call'
+if six.PY3:
+    from unittest.mock import patch
+else:
+    from mock import patch
+
+PATCH_METHOD = 'pynamodb.connection.Connection._make_api_call'
 
 
 class ConnectionTestCase(TestCase):
@@ -29,7 +34,18 @@ class ConnectionTestCase(TestCase):
         conn = TableConnection(self.test_table_name)
         self.assertIsNotNone(conn)
 
-    async def test_create_table(self):
+    def test_connection_session_set_credentials(self):
+        conn = TableConnection(
+            self.test_table_name,
+            aws_access_key_id='access_key_id',
+            aws_secret_access_key='secret_access_key')
+
+        credentials = conn.connection.session.get_credentials()
+
+        self.assertEqual(credentials.access_key, 'access_key_id')
+        self.assertEqual(credentials.secret_key, 'secret_access_key')
+
+    def test_create_table(self):
         """
         TableConnection.create_table
         """
@@ -38,9 +54,7 @@ class ConnectionTestCase(TestCase):
             'read_capacity_units': 1,
             'write_capacity_units': 1,
         }
-        with pytest.raises(ValueError):
-            await conn.create_table(**kwargs)
-
+        self.assertRaises(ValueError, conn.create_table, **kwargs)
         kwargs['attribute_definitions'] = [
             {
                 'attribute_name': 'key1',
@@ -51,10 +65,7 @@ class ConnectionTestCase(TestCase):
                 'attribute_type': 'S'
             }
         ]
-
-        with pytest.raises(ValueError):
-            await conn.create_table(**kwargs)
-
+        self.assertRaises(ValueError, conn.create_table, **kwargs)
         kwargs['key_schema'] = [
             {
                 'attribute_name': 'key1',
@@ -67,6 +78,7 @@ class ConnectionTestCase(TestCase):
         ]
         params = {
             'TableName': 'ci-table',
+            'BillingMode': PROVISIONED_BILLING_MODE,
             'ProvisionedThroughput': {
                 'WriteCapacityUnits': 1,
                 'ReadCapacityUnits': 1
@@ -94,13 +106,31 @@ class ConnectionTestCase(TestCase):
         }
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.create_table(
+            conn.create_table(
                 **kwargs
             )
             kwargs = req.call_args[0][1]
             self.assertEqual(kwargs, params)
 
-    async def test_delete_table(self):
+    def test_update_time_to_live(self):
+        """
+        TableConnection.update_time_to_live
+        """
+        params = {
+            'TableName': 'ci-table',
+            'TimeToLiveSpecification': {
+                'AttributeName': 'ttl_attr',
+                'Enabled': True,
+            }
+        }
+        with patch(PATCH_METHOD) as req:
+            req.return_value = HttpOK(), None
+            conn = TableConnection(self.test_table_name)
+            conn.update_time_to_live('ttl_attr')
+            kwargs = req.call_args[0][1]
+            self.assertEqual(kwargs, params)
+
+    def test_delete_table(self):
         """
         TableConnection.delete_table
         """
@@ -108,11 +138,11 @@ class ConnectionTestCase(TestCase):
         with patch(PATCH_METHOD) as req:
             req.return_value = HttpOK(), None
             conn = TableConnection(self.test_table_name)
-            await conn.delete_table()
+            conn.delete_table()
             kwargs = req.call_args[0][1]
             self.assertEqual(kwargs, params)
 
-    async def test_update_table(self):
+    def test_update_table(self):
         """
         TableConnection.update_table
         """
@@ -126,7 +156,7 @@ class ConnectionTestCase(TestCase):
                 },
                 'TableName': self.test_table_name
             }
-            await conn.update_table(
+            conn.update_table(
                 read_capacity_units=2,
                 write_capacity_units=2
             )
@@ -162,36 +192,36 @@ class ConnectionTestCase(TestCase):
 
                 ]
             }
-            await conn.update_table(
+            conn.update_table(
                 read_capacity_units=2,
                 write_capacity_units=2,
                 global_secondary_index_updates=global_secondary_index_updates
             )
             self.assertEqual(req.call_args[0][1], params)
 
-    async def test_describe_table(self):
+    def test_describe_table(self):
         """
         TableConnection.describe_table
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
             conn = TableConnection(self.test_table_name)
-            await conn.describe_table()
+            conn.describe_table()
             self.assertEqual(conn.table_name, self.test_table_name)
             self.assertEqual(req.call_args[0][1], {'TableName': 'ci-table'})
 
-    async def test_delete_item(self):
+    def test_delete_item(self):
         """
         TableConnection.delete_item
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.delete_item(
+            conn.delete_item(
                 "Amazon DynamoDB",
                 "How do I update multiple items?")
             params = {
@@ -208,14 +238,14 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    async def test_update_item(self):
+    def test_update_item(self):
         """
         TableConnection.update_item
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         attr_updates = {
             'Subject': {
@@ -226,7 +256,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = HttpOK(), {}
-            await conn.update_item(
+            conn.update_item(
                 'foo-key',
                 actions=[Path('Subject').set('foo-subject')],
                 range_key='foo-range-key',
@@ -254,62 +284,32 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-        with patch(PATCH_METHOD) as req:
-            req.return_value = HttpOK(), {}
-            await conn.update_item(
-                'foo-key',
-                attribute_updates=attr_updates,
-                range_key='foo-range-key',
-            )
-            params = {
-                'Key': {
-                    'ForumName': {
-                        'S': 'foo-key'
-                    },
-                    'Subject': {
-                        'S': 'foo-range-key'
-                    }
-                },
-                'UpdateExpression': 'SET #0 = :0',
-                'ExpressionAttributeNames': {
-                    '#0': 'Subject'
-                },
-                'ExpressionAttributeValues': {
-                    ':0': {
-                        'S': 'foo-subject'
-                    }
-                },
-                'ReturnConsumedCapacity': 'TOTAL',
-                'TableName': 'ci-table'
-            }
-            self.assertEqual(req.call_args[0][1], params)
-
-    async def test_get_item(self):
+    def test_get_item(self):
         """
         TableConnection.get_item
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         with patch(PATCH_METHOD) as req:
             req.return_value = GET_ITEM_DATA
-            item = await conn.get_item("Amazon DynamoDB", "How do I update multiple items?")
+            item = conn.get_item("Amazon DynamoDB", "How do I update multiple items?")
             self.assertEqual(item, GET_ITEM_DATA)
 
-    async def test_put_item(self):
+    def test_put_item(self):
         """
         TableConnection.put_item
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.put_item(
+            conn.put_item(
                 'foo-key',
                 range_key='foo-range-key',
                 attributes={'ForumName': 'foo-value'}
@@ -323,7 +323,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.put_item(
+            conn.put_item(
                 'foo-key',
                 range_key='foo-range-key',
                 attributes={'ForumName': 'foo-value'}
@@ -344,7 +344,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = HttpOK(), {}
-            await conn.put_item(
+            conn.put_item(
                 'foo-key',
                 range_key='foo-range-key',
                 attributes={'ForumName': 'foo-value'},
@@ -368,38 +368,7 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-        with patch(PATCH_METHOD) as req:
-            req.return_value = HttpOK(), {}
-            await conn.put_item(
-                'foo-key',
-                range_key='foo-range-key',
-                attributes={'ForumName': 'foo-value'},
-                conditional_operator='and',
-                expected={
-                    'ForumName': {
-                        'Exists': False
-                    }
-                }
-            )
-            params = {
-                'ReturnConsumedCapacity': 'TOTAL',
-                'Item': {
-                    'ForumName': {
-                        'S': 'foo-value'
-                    },
-                    'Subject': {
-                        'S': 'foo-range-key'
-                    }
-                },
-                'TableName': self.test_table_name,
-                'ConditionExpression': 'attribute_not_exists (#0)',
-                'ExpressionAttributeNames': {
-                    '#0': 'ForumName'
-                }
-            }
-            self.assertEqual(req.call_args[0][1], params)
-
-    async def test_batch_write_item(self):
+    def test_batch_write_item(self):
         """
         TableConnection.batch_write_item
         """
@@ -407,14 +376,14 @@ class ConnectionTestCase(TestCase):
         conn = TableConnection(self.test_table_name)
         for i in range(10):
             items.append(
-                {"ForumName": "FooForum", "Subject": "thread-{0}".format(i)}
+                {"ForumName": "FooForum", "Subject": "thread-{}".format(i)}
             )
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.batch_write_item(
+            conn.batch_write_item(
                 put_items=items
             )
             params = {
@@ -436,7 +405,7 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    async def test_batch_get_item(self):
+    def test_batch_get_item(self):
         """
         TableConnection.batch_get_item
         """
@@ -444,15 +413,15 @@ class ConnectionTestCase(TestCase):
         conn = TableConnection(self.test_table_name)
         for i in range(10):
             items.append(
-                {"ForumName": "FooForum", "Subject": "thread-{0}".format(i)}
+                {"ForumName": "FooForum", "Subject": "thread-{}".format(i)}
             )
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.batch_get_item(
+            conn.batch_get_item(
                 items
             )
             params = {
@@ -476,18 +445,18 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    async def test_query(self):
+    def test_query(self):
         """
         TableConnection.query
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            await conn.query(
+            conn.query(
                 "FooForum",
                 Path('Subject').startswith('thread')
             )
@@ -510,89 +479,19 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-        with patch(PATCH_METHOD) as req:
-            req.return_value = {}
-            await conn.query(
-                "FooForum",
-                key_conditions={'Subject': {'ComparisonOperator': 'BEGINS_WITH', 'AttributeValueList': ['thread']}}
-            )
-            params = {
-                'ReturnConsumedCapacity': 'TOTAL',
-                'KeyConditionExpression': '(#0 = :0 AND begins_with (#1, :1))',
-                'ExpressionAttributeNames': {
-                    '#0': 'ForumName',
-                    '#1': 'Subject'
-                },
-                'ExpressionAttributeValues': {
-                    ':0': {
-                        'S': 'FooForum'
-                    },
-                    ':1': {
-                        'S': 'thread'
-                    }
-                },
-                'TableName': self.test_table_name
-            }
-            self.assertEqual(req.call_args[0][1], params)
-
-    async def test_scan(self):
+    def test_scan(self):
         """
         TableConnection.scan
         """
         conn = TableConnection(self.test_table_name)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            await conn.describe_table()
+            conn.describe_table()
         with patch(PATCH_METHOD) as req:
             req.return_value = HttpOK(), {}
-            await conn.scan()
+            conn.scan()
             params = {
                 'ReturnConsumedCapacity': 'TOTAL',
                 'TableName': self.test_table_name
             }
             self.assertEqual(req.call_args[0][1], params)
-
-    async def test_rate_limited_scan(self):
-        """
-        TableConnection.rate_limited_scan
-        """
-        conn = TableConnection(self.test_table_name)
-        with patch('inpynamodb.connection.AsyncConnection.rate_limited_scan') as req:
-            req.return_value = {}
-            conn.rate_limited_scan(
-                attributes_to_get='attributes_to_get',
-                page_size=1,
-                limit=2,
-                conditional_operator='AND',
-                scan_filter={'filter': 'X'},
-                segment=2,
-                total_segments=4,
-                exclusive_start_key='EX',
-                timeout_seconds=11,
-                read_capacity_to_consume_per_second=12,
-                allow_rate_limited_scan_without_consumed_capacity=False,
-                max_sleep_between_retry=3,
-                max_consecutive_exceptions=7,
-                consistent_read=True,
-                index_name='index'
-            )
-            self.assertEqual(self.test_table_name, req.call_args[0][0])
-            params = {
-                'filter_condition': None,
-                'attributes_to_get': 'attributes_to_get',
-                'page_size': 1,
-                'limit': 2,
-                'conditional_operator': 'AND',
-                'scan_filter': {'filter': 'X'},
-                'segment': 2,
-                'total_segments': 4,
-                'exclusive_start_key': 'EX',
-                'timeout_seconds': 11,
-                'read_capacity_to_consume_per_second': 12,
-                'allow_rate_limited_scan_without_consumed_capacity': False,
-                'max_sleep_between_retry': 3,
-                'max_consecutive_exceptions': 7,
-                'consistent_read': True,
-                'index_name': 'index'
-            }
-            self.assertEqual(params, req.call_args[1])
