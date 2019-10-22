@@ -1,6 +1,6 @@
 """
-PynamoDB lowest level connection
+InPynamoDB lowest level connection
 """
 
 from inpynamodb.connection.base import AsyncConnection
-# from inpynamodb.connection.table import TableConnection
+from inpynamodb.connection.table import TableConnection
