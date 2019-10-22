@@ -1,11 +1,12 @@
 from setuptools import setup, find_packages
 
 install_requires = [
-    'PynamoDB==3.3.0',
-    'aiobotocore==0.10.2'
+    'PynamoDB==4.1.0',
+    'aiobotocore==0.10.3',
+    'async-property==0.2.1'
 ]
 
-python_requires = '>=3.5'
+python_requires = '>=3.6'
 
 
 def version():
@@ -17,9 +18,9 @@ setup(
     name='InPynamoDB',
     version=__import__('inpynamodb').__version__,
     packages=find_packages(),
-    author='Sunghyun Lee',
-    author_email='jolacaleb@gmail.com',
-    description='Asynchronous implementation of PynamoDB',
+    author='sunghyun-lee',
+    author_email='sunghyunlee@mymusictaste.com',
+    description='asyncio wrapper of PynamoDB',
     zip_safe=False,
     license='MIT',
     keywords='python dynamodb amazon async pynamodb',

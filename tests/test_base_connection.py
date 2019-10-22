@@ -3,36 +3,33 @@ Tests for the base connection class
 """
 import base64
 import json
-import six
-from unittest import TestCase
+import unittest
 
-import botocore.exceptions
-from botocore.awsrequest import AWSPreparedRequest, AWSRequest, AWSResponse
-from botocore.client import ClientError
-from botocore.exceptions import BotoCoreError
-
+import botocore
 import pytest
-
-from pynamodb.connection import Connection
+from asynctest import TestCase, mock, CoroutineMock
+from asynctest.mock import patch
+from botocore.awsrequest import AWSResponse, AWSRequest, AWSPreparedRequest
+from botocore.exceptions import BotoCoreError, ClientError
 from pynamodb.connection.base import MetaTable
+
 from pynamodb.exceptions import (
-    TableError, DeleteError, PutError, ScanError, GetError, UpdateError, TableDoesNotExist)
+    TableError, DeleteError, PutError, ScanError, GetError, UpdateError, TableDoesNotExist
+)
 from pynamodb.constants import (
     DEFAULT_REGION, UNPROCESSED_ITEMS, STRING_SHORT, BINARY_SHORT, DEFAULT_ENCODING, TABLE_KEY,
-    PROVISIONED_BILLING_MODE, PAY_PER_REQUEST_BILLING_MODE)
+    PROVISIONED_BILLING_MODE, PAY_PER_REQUEST_BILLING_MODE
+)
 from pynamodb.expressions.operand import Path, Value
 from pynamodb.expressions.update import SetAction
 from .data import DESCRIBE_TABLE_DATA, GET_ITEM_DATA, LIST_TABLE_DATA
 from .deep_eq import deep_eq
 
-if six.PY3:
-    from unittest.mock import patch
-    from unittest import mock
-else:
-    from mock import patch
-    import mock
+from inpynamodb.connection.base import AsyncConnection
+from tests.data import DESCRIBE_TABLE_DATA
 
-PATCH_METHOD = 'pynamodb.connection.Connection._make_api_call'
+
+PATCH_METHOD = 'aiobotocore.client.AioBaseClient._make_api_call'
 
 
 class MetaTableTestCase(TestCase):
@@ -72,19 +69,19 @@ class ConnectionTestCase(TestCase):
 
     def test_create_connection(self):
         """
-        Connection()
+        AsyncConnection()
         """
-        conn = Connection()
+        conn = AsyncConnection()
         self.assertIsNotNone(conn)
-        conn = Connection(host='http://foohost')
+        conn = AsyncConnection(host='http://foohost')
         self.assertIsNotNone(conn.client)
         self.assertIsNotNone(conn)
-        self.assertEqual(repr(conn), "Connection<{}>".format(conn.host))
+        self.assertEqual(repr(conn), "AsyncConnection")
 
     def test_subsequent_client_is_not_cached_when_credentials_none(self):
-        with patch('pynamodb.connection.Connection.session') as session_mock:
+        with patch('inpynamodb.connection.AsyncConnection.session') as session_mock:
             session_mock.create_client.return_value._request_signer._credentials = None
-            conn = Connection()
+            conn = AsyncConnection()
 
             # make two calls to .client property, expect two calls to create client
             self.assertIsNotNone(conn.client)
@@ -99,29 +96,34 @@ class ConnectionTestCase(TestCase):
             )
 
     def test_subsequent_client_is_cached_when_credentials_truthy(self):
-        with patch('pynamodb.connection.Connection.session') as session_mock:
+        with patch('inpynamodb.connection.AsyncConnection.session', new_callable=CoroutineMock) as session_mock:
             session_mock.create_client.return_value._request_signer._credentials = True
-            conn = Connection()
+            conn = AsyncConnection()
 
             # make two calls to .client property, expect one call to create client
             self.assertIsNotNone(conn.client)
             self.assertIsNotNone(conn.client)
 
             self.assertEqual(
-                session_mock.create_client.mock_calls.count(mock.call('dynamodb', 'us-east-1', endpoint_url=None, config=mock.ANY)),
-                1
+                session_mock.create_client.mock_calls.count(
+                    mock.call('dynamodb', 'us-east-1', endpoint_url=None, config=mock.ANY)
+                ), 1
             )
 
-    def test_create_table(self):
+    async def test_create_table(self):
         """
         Connection.create_table
         """
-        conn = Connection(self.region)
+        conn = AsyncConnection(self.region)
         kwargs = {
             'read_capacity_units': 1,
             'write_capacity_units': 1,
         }
-        self.assertRaises(ValueError, conn.create_table, self.test_table_name, **kwargs)
+        self.assertAsyncRaises(
+            ValueError,
+            conn.create_table(self.test_table_name, **kwargs)
+        )
+
         kwargs['attribute_definitions'] = [
             {
                 'attribute_name': 'key1',
@@ -132,7 +134,10 @@ class ConnectionTestCase(TestCase):
                 'attribute_type': 'S'
             }
         ]
-        self.assertRaises(ValueError, conn.create_table, self.test_table_name, **kwargs)
+        self.assertAsyncRaises(
+            ValueError,
+            conn.create_table(self.test_table_name, **kwargs)
+        )
         kwargs['key_schema'] = [
             {
                 'attribute_name': 'key1',
@@ -173,11 +178,14 @@ class ConnectionTestCase(TestCase):
         }
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(TableError, conn.create_table, self.test_table_name, **kwargs)
+            self.assertAsyncRaises(
+                TableError,
+                conn.create_table(self.test_table_name, **kwargs)
+            )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn.create_table(
+            await conn.create_table(
                 self.test_table_name,
                 **kwargs
             )
@@ -207,7 +215,7 @@ class ConnectionTestCase(TestCase):
                                                                          'WriteCapacityUnits': 1}}]
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn.create_table(
+            await conn.create_table(
                 self.test_table_name,
                 **kwargs
             )
@@ -250,7 +258,7 @@ class ConnectionTestCase(TestCase):
         ]
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn.create_table(
+            await conn.create_table(
                 self.test_table_name,
                 **kwargs
             )
@@ -266,7 +274,7 @@ class ConnectionTestCase(TestCase):
         }
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn.create_table(
+            await conn.create_table(
                 self.test_table_name,
                 **kwargs
             )
@@ -277,36 +285,36 @@ class ConnectionTestCase(TestCase):
         del params['ProvisionedThroughput']
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn.create_table(
+            await conn.create_table(
                 self.test_table_name,
                 **kwargs
             )
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_delete_table(self):
+    async def test_delete_table(self):
         """
         Connection.delete_table
         """
         params = {'TableName': 'ci-table'}
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn = Connection(self.region)
-            conn.delete_table(self.test_table_name)
+            conn = AsyncConnection(self.region)
+            await conn.delete_table(self.test_table_name)
             kwargs = req.call_args[0][1]
             self.assertEqual(kwargs, params)
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            conn = Connection(self.region)
-            self.assertRaises(TableError, conn.delete_table, self.test_table_name)
+            conn = AsyncConnection(self.region)
+            self.assertAsyncRaises(TableError, conn.delete_table(self.test_table_name))
 
-    def test_update_table(self):
+    async def test_update_table(self):
         """
         Connection.update_table
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn = Connection(self.region)
+            conn = AsyncConnection(self.region)
             params = {
                 'ProvisionedThroughput': {
                     'WriteCapacityUnits': 2,
@@ -314,28 +322,33 @@ class ConnectionTestCase(TestCase):
                 },
                 'TableName': 'ci-table'
             }
-            conn.update_table(
+            await conn.update_table(
                 self.test_table_name,
                 read_capacity_units=2,
                 write_capacity_units=2
             )
             self.assertEqual(req.call_args[0][1], params)
 
-        self.assertRaises(ValueError, conn.update_table, self.test_table_name, read_capacity_units=2)
+        self.assertAsyncRaises(
+            ValueError,
+            conn.update_table(self.test_table_name, read_capacity_units=2)
+        )
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            conn = Connection(self.region)
-            self.assertRaises(
+            conn = AsyncConnection(self.region)
+            self.assertAsyncRaises(
                 TableError,
-                conn.update_table,
-                self.test_table_name,
-                read_capacity_units=2,
-                write_capacity_units=2)
+                conn.update_table(
+                    self.test_table_name,
+                    read_capacity_units=2,
+                    write_capacity_units=2
+                )
+            )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = None
-            conn = Connection(self.region)
+            conn = AsyncConnection(self.region)
 
             global_secondary_index_updates = [
                 {
@@ -363,7 +376,7 @@ class ConnectionTestCase(TestCase):
 
                 ]
             }
-            conn.update_table(
+            await conn.update_table(
                 self.test_table_name,
                 read_capacity_units=2,
                 write_capacity_units=2,
@@ -371,72 +384,77 @@ class ConnectionTestCase(TestCase):
             )
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_describe_table(self):
+    async def test_describe_table(self):
         """
         Connection.describe_table
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn = Connection(self.region)
-            conn.describe_table(self.test_table_name)
+            conn = AsyncConnection(self.region)
+            await conn.describe_table(self.test_table_name)
             self.assertEqual(req.call_args[0][1], {'TableName': 'ci-table'})
 
         with self.assertRaises(TableDoesNotExist):
             with patch(PATCH_METHOD) as req:
-                req.side_effect = ClientError({'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}}, "DescribeTable")
-                conn = Connection(self.region)
-                conn.describe_table(self.test_table_name)
+                req.side_effect = ClientError(
+                    {'Error': {'Code': 'ResourceNotFoundException', 'Message': 'Not Found'}}, "DescribeTable"
+                )
+                conn = AsyncConnection(self.region)
+                await conn.describe_table(self.test_table_name)
 
         with self.assertRaises(TableDoesNotExist):
             with patch(PATCH_METHOD) as req:
                 req.side_effect = ValueError()
-                conn = Connection(self.region)
-                conn.describe_table(self.test_table_name)
+                conn = AsyncConnection(self.region)
+                await conn.describe_table(self.test_table_name)
 
-    def test_list_tables(self):
+    async def test_list_tables(self):
         """
         Connection.list_tables
         """
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = Connection(self.region)
-            conn.list_tables(exclusive_start_table_name='Thread')
+            conn = AsyncConnection(self.region)
+            await conn.list_tables(exclusive_start_table_name='Thread')
             self.assertEqual(req.call_args[0][1], {'ExclusiveStartTableName': 'Thread'})
 
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = Connection(self.region)
-            conn.list_tables(limit=3)
+            conn = AsyncConnection(self.region)
+            await conn.list_tables(limit=3)
             self.assertEqual(req.call_args[0][1], {'Limit': 3})
 
         with patch(PATCH_METHOD) as req:
             req.return_value = LIST_TABLE_DATA
-            conn = Connection(self.region)
-            conn.list_tables()
+            conn = AsyncConnection(self.region)
+            await conn.list_tables()
             self.assertEqual(req.call_args[0][1], {})
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            conn = Connection(self.region)
-            self.assertRaises(TableError, conn.list_tables)
+            conn = AsyncConnection(self.region)
+            self.assertAsyncRaises(TableError, conn.list_tables())
 
     @pytest.mark.filterwarnings("ignore:Legacy conditional")
-    def test_delete_item(self):
+    async def test_delete_item(self):
         """
         Connection.delete_item
         """
-        conn = Connection(self.region)
+        conn = AsyncConnection(self.region)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(self.test_table_name)
+            await conn.describe_table(self.test_table_name)
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(DeleteError, conn.delete_item, self.test_table_name, "foo", "bar")
+            self.assertAsyncRaises(
+                DeleteError,
+                conn.delete_item(self.test_table_name, "foo", "bar")
+            )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.delete_item(
+            await conn.delete_item(
                 self.test_table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?")
@@ -455,7 +473,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.delete_item(
+            await conn.delete_item(
                 self.test_table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?",
@@ -476,33 +494,29 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.delete_item,
-            self.test_table_name,
-            "foo",
-            "bar",
-            return_values='bad_values')
+            conn.delete_item(self.test_table_name, "foo", "bar", return_values='bad_values')
+        )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.delete_item,
-            self.test_table_name,
-            "foo",
-            "bar",
-            return_consumed_capacity='badvalue')
+            conn.delete_item(self.test_table_name, "foo", "bar", return_consumed_capacity='badvalue')
+        )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.delete_item,
-            self.test_table_name,
-            "foo",
-            "bar",
-            return_item_collection_metrics='badvalue')
+            conn.delete_item(
+                self.test_table_name,
+                "foo",
+                "bar",
+                return_item_collection_metrics='badvalue'
+            )
+        )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.delete_item(
+            await conn.delete_item(
                 self.test_table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?",
@@ -524,7 +538,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.delete_item(
+            await conn.delete_item(
                 self.test_table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?",
@@ -547,7 +561,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.delete_item(
+            await conn.delete_item(
                 self.test_table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?",
@@ -573,34 +587,35 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_get_item(self):
+    async def test_get_item(self):
         """
         Connection.get_item
         """
-        conn = Connection(self.region)
+        conn = AsyncConnection(self.region)
         table_name = 'Thread'
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(table_name)
+            await conn.describe_table(table_name)
 
         with patch(PATCH_METHOD) as req:
             req.return_value = GET_ITEM_DATA
-            item = conn.get_item(table_name, "Amazon DynamoDB", "How do I update multiple items?")
+            item = await conn.get_item(table_name, "Amazon DynamoDB", "How do I update multiple items?")
             self.assertEqual(item, GET_ITEM_DATA)
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 GetError,
-                conn.get_item,
-                table_name,
-                "Amazon DynamoDB",
-                "How do I update multiple items?"
+                conn.get_item(
+                    table_name,
+                    "Amazon DynamoDB",
+                    "How do I update multiple items?"
+                )
             )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = GET_ITEM_DATA
-            conn.get_item(
+            await conn.get_item(
                 table_name,
                 "Amazon DynamoDB",
                 "How do I update multiple items?",
@@ -626,18 +641,18 @@ class ConnectionTestCase(TestCase):
             self.assertEqual(req.call_args[0][1], params)
 
     @pytest.mark.filterwarnings("ignore")
-    def test_update_item(self):
+    async def test_update_item(self):
         """
         Connection.update_item
         """
-        conn = Connection()
+        conn = AsyncConnection()
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(self.test_table_name)
+            await conn.describe_table(self.test_table_name)
 
-        self.assertRaises(ValueError, conn.update_item, self.test_table_name, 'foo-key')
+        self.assertAsyncRaises(ValueError, conn.update_item(self.test_table_name, 'foo-key'))
 
-        self.assertRaises(ValueError, conn.update_item, self.test_table_name, 'foo', actions=[])
+        self.assertAsyncRaises(ValueError, conn.update_item(self.test_table_name, 'foo', actions=[]))
 
         attr_updates = {
             'Subject': {
@@ -648,7 +663,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.update_item(
+            await conn.update_item(
                 self.test_table_name,
                 'foo-key',
                 return_consumed_capacity='TOTAL',
@@ -689,7 +704,7 @@ class ConnectionTestCase(TestCase):
             req.return_value = {}
             # attributes are missing
             with self.assertRaises(ValueError):
-                conn.update_item(
+                await conn.update_item(
                     self.test_table_name,
                     'foo-key',
                     range_key='foo-range-key',
@@ -697,7 +712,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.update_item(
+            await conn.update_item(
                 self.test_table_name,
                 'foo-key',
                 actions=[Path('Subject').set('Bar')],
@@ -734,38 +749,40 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 UpdateError,
-                conn.update_item,
-                self.test_table_name,
-                'foo-key',
-                range_key='foo-range-key',
-                actions=[SetAction(Path('bar'), Value('foobar'))],
+                conn.update_item(
+                    self.test_table_name,
+                    'foo-key',
+                    range_key='foo-range-key',
+                    actions=[SetAction(Path('bar'), Value('foobar'))],
+                )
             )
 
-    def test_put_item(self):
+    async def test_put_item(self):
         """
         Connection.put_item
         """
-        conn = Connection(self.region)
+        conn = AsyncConnection(self.region)
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(self.test_table_name)
+            await conn.describe_table(self.test_table_name)
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 TableError,
-                conn.put_item,
-                'foo-key',
-                self.test_table_name,
-                return_values='ALL_NEW',
-                attributes={'ForumName': 'foo-value'}
+                conn.put_item(
+                    'foo-key',
+                    self.test_table_name,
+                    return_values='ALL_NEW',
+                    attributes={'ForumName': 'foo-value'}
+                )
             )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.put_item(
+            await conn.put_item(
                 self.test_table_name,
                 'foo-key',
                 range_key='foo-range-key',
@@ -792,18 +809,19 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 PutError,
-                conn.put_item,
-                self.test_table_name,
-                'foo-key',
-                range_key='foo-range-key',
-                attributes={'ForumName': 'foo-value'}
+                conn.put_item(
+                    self.test_table_name,
+                    'foo-key',
+                    range_key='foo-range-key',
+                    attributes={'ForumName': 'foo-value'}
+                )
             )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.put_item(
+            await conn.put_item(
                 self.test_table_name,
                 'foo-key',
                 range_key='foo-range-key',
@@ -816,7 +834,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.put_item(
+            await conn.put_item(
                 self.test_table_name,
                 'foo-key',
                 range_key='foo-range-key',
@@ -838,7 +856,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.put_item(
+            await conn.put_item(
                 self.test_table_name,
                 'item1-hash',
                 range_key='item1-range',
@@ -874,7 +892,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.put_item(
+            await conn.put_item(
                 self.test_table_name,
                 'item1-hash',
                 range_key='item1-range',
@@ -907,10 +925,10 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_transact_write_items(self):
-        conn = Connection()
+    async def test_transact_write_items(self):
+        conn = AsyncConnection()
         with patch(PATCH_METHOD) as req:
-            conn.transact_write_items([], [], [], [])
+            await conn.transact_write_items([], [], [], [])
             self.assertEqual(req.call_args[0][0], 'TransactWriteItems')
             self.assertDictEqual(
                 req.call_args[0][1], {
@@ -919,10 +937,10 @@ class ConnectionTestCase(TestCase):
                 }
             )
 
-    def test_transact_get_items(self):
-        conn = Connection()
+    async def test_transact_get_items(self):
+        conn = AsyncConnection()
         with patch(PATCH_METHOD) as req:
-            conn.transact_get_items([])
+            await conn.transact_get_items([])
             self.assertEqual(req.call_args[0][0], 'TransactGetItems')
             self.assertDictEqual(
                 req.call_args[0][1], {
@@ -931,29 +949,29 @@ class ConnectionTestCase(TestCase):
                 }
             )
 
-    def test_batch_write_item(self):
+    async def test_batch_write_item(self):
         """
         Connection.batch_write_item
         """
         items = []
-        conn = Connection()
+        conn = AsyncConnection()
         table_name = 'Thread'
         for i in range(10):
             items.append(
                 {"ForumName": "FooForum", "Subject": "thread-{}".format(i)}
             )
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.batch_write_item,
-            table_name)
+            conn.batch_write_item(table_name)
+        )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(table_name)
+            await conn.describe_table(table_name)
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_write_item(
+            await conn.batch_write_item(
                 table_name,
                 put_items=items,
                 return_item_collection_metrics='SIZE',
@@ -981,7 +999,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_write_item(
+            await conn.batch_write_item(
                 table_name,
                 put_items=items
             )
@@ -1005,16 +1023,14 @@ class ConnectionTestCase(TestCase):
             self.assertEqual(req.call_args[0][1], params)
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 PutError,
-                conn.batch_write_item,
-                table_name,
-                delete_items=items
+                conn.batch_write_item(table_name, delete_items=items)
             )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_write_item(
+            await conn.batch_write_item(
                 table_name,
                 delete_items=items
             )
@@ -1039,7 +1055,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_write_item(
+            await conn.batch_write_item(
                 table_name,
                 delete_items=items,
                 return_consumed_capacity='TOTAL',
@@ -1065,12 +1081,12 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_batch_get_item(self):
+    async def test_batch_get_item(self):
         """
         Connection.batch_get_item
         """
         items = []
-        conn = Connection()
+        conn = AsyncConnection()
         table_name = 'Thread'
         for i in range(10):
             items.append(
@@ -1078,23 +1094,21 @@ class ConnectionTestCase(TestCase):
             )
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(table_name)
+            await conn.describe_table(table_name)
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 GetError,
-                conn.batch_get_item,
-                table_name,
-                items,
-                consistent_read=True,
-                return_consumed_capacity='TOTAL',
-                attributes_to_get=['ForumName']
+                conn.batch_get_item(
+                    table_name, items, consistent_read=True, return_consumed_capacity='TOTAL',
+                    attributes_to_get=['ForumName']
+                )
             )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_get_item(
+            await conn.batch_get_item(
                 table_name,
                 items,
                 consistent_read=True,
@@ -1129,7 +1143,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.batch_get_item(
+            await conn.batch_get_item(
                 table_name,
                 items
             )
@@ -1154,67 +1168,72 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_query(self):
+    async def test_query(self):
         """
         Connection.query
         """
-        conn = Connection()
+        conn = AsyncConnection()
         table_name = 'Thread'
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(table_name)
+            await conn.describe_table(table_name)
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.query,
-            table_name,
-            "FooForum",
-            Path('NotRangeKey').startswith('thread'),
-            Path('Foo') == 'Bar',
-            return_consumed_capacity='TOTAL'
+            conn.query(
+                table_name,
+                "FooForum",
+                Path('NotRangeKey').startswith('thread'),
+                Path('Foo') == 'Bar',
+                return_consumed_capacity='TOTAL'
+            )
         )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.query,
-            table_name,
-            "FooForum",
-            Path('Subject') != 'thread',  # invalid sort key condition
-            return_consumed_capacity='TOTAL'
+            conn.query(
+                table_name,
+                "FooForum",
+                Path('Subject') != 'thread',  # invalid sort key condition
+                return_consumed_capacity='TOTAL'
+            )
         )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.query,
-            table_name,
-            "FooForum",
-            Path('Subject').startswith('thread'),
-            Path('ForumName') == 'FooForum',  # filter containing hash key
-            return_consumed_capacity='TOTAL'
+            conn.query(
+                table_name,
+                "FooForum",
+                Path('Subject').startswith('thread'),
+                Path('ForumName') == 'FooForum',  # filter containing hash key
+                return_consumed_capacity='TOTAL'
+            )
         )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.query,
-            table_name,
-            "FooForum",
-            Path('Subject').startswith('thread'),
-            Path('Subject').startswith('thread'),  # filter containing range key
-            return_consumed_capacity='TOTAL'
+            conn.query(
+                table_name,
+                "FooForum",
+                Path('Subject').startswith('thread'),
+                Path('Subject').startswith('thread'),  # filter containing range key
+                return_consumed_capacity='TOTAL'
+            )
         )
 
-        self.assertRaises(
+        self.assertAsyncRaises(
             ValueError,
-            conn.query,
-            table_name,
-            "FooForum",
-            limit=1,
-            index_name='NonExistentIndexName'
+            conn.query(
+                table_name,
+                "FooForum",
+                limit=1,
+                index_name='NonExistentIndexName'
+            )
         )
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.query(
+            await conn.query(
                 table_name,
                 "FooForum",
                 Path('Subject').startswith('thread'),
@@ -1245,7 +1264,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.query(
+            await conn.query(
                 table_name,
                 "FooForum",
                 Path('Subject').startswith('thread')
@@ -1271,7 +1290,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.query(
+            await conn.query(
                 table_name,
                 "FooForum",
                 limit=1,
@@ -1306,7 +1325,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.query(
+            await conn.query(
                 table_name,
                 "FooForum",
                 select='ALL_ATTRIBUTES',
@@ -1333,20 +1352,20 @@ class ConnectionTestCase(TestCase):
             }
             self.assertEqual(req.call_args[0][1], params)
 
-    def test_scan(self):
+    async def test_scan(self):
         """
         Connection.scan
         """
-        conn = Connection()
+        conn = AsyncConnection()
         table_name = 'Thread'
 
         with patch(PATCH_METHOD) as req:
             req.return_value = DESCRIBE_TABLE_DATA
-            conn.describe_table(table_name)
+            await conn.describe_table(table_name)
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.scan(
+            await conn.scan(
                 table_name,
                 segment=0,
                 total_segments=22,
@@ -1363,7 +1382,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.scan(
+            await conn.scan(
                 table_name,
                 segment=0,
                 total_segments=22,
@@ -1378,7 +1397,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.scan(
+            await conn.scan(
                 table_name,
                 return_consumed_capacity='TOTAL',
                 exclusive_start_key="FooForum",
@@ -1409,7 +1428,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.scan(
+            await conn.scan(
                 table_name,
             )
             params = {
@@ -1420,7 +1439,7 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.return_value = {}
-            conn.scan(
+            await conn.scan(
                 table_name,
                 Path('ForumName').startswith('Foo') & Path('Subject').contains('Foo')
             )
@@ -1445,12 +1464,12 @@ class ConnectionTestCase(TestCase):
 
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(
+            self.assertAsyncRaises(
                 ScanError,
-                conn.scan,
-                table_name)
+                conn.scan(table_name)
+            )
 
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call_throws_verbose_error_after_backoff(self, client_mock):
         response = AWSResponse(
             url='http://lyft.com',
@@ -1461,7 +1480,7 @@ class ConnectionTestCase(TestCase):
         response._content = json.dumps({'message': 'There is a problem', '__type': 'InternalServerError'}).encode('utf-8')
         client_mock._endpoint.http_session.send.return_value = response
 
-        c = Connection()
+        c = AsyncConnection()
 
         with self.assertRaises(ClientError):
             try:
@@ -1474,7 +1493,7 @@ class ConnectionTestCase(TestCase):
                 raise
 
     @mock.patch('random.randint')
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call_throws_verbose_error_after_backoff_later_succeeds(self, client_mock, rand_int_mock):
         # mock response
         bad_response = mock.Mock(spec=AWSResponse)
@@ -1499,14 +1518,14 @@ class ConnectionTestCase(TestCase):
 
         rand_int_mock.return_value = 1
 
-        c = Connection()
+        c = AsyncConnection()
 
         self.assertEqual(good_response_content, c._make_api_call('CreateTable', {'TableName': 'MyTable'}))
         self.assertEqual(len(send_mock.mock_calls), 3)
 
         assert rand_int_mock.call_args_list == [mock.call(0, 25), mock.call(0, 50)]
 
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call_retries_properly(self, client_mock):
         deserializable_response = AWSResponse(
             url='',
@@ -1533,7 +1552,7 @@ class ConnectionTestCase(TestCase):
             bad_response,
             deserializable_response,
         ]
-        c = Connection()
+        c = AsyncConnection()
         c._max_retry_attempts_exception = 3
         c._create_prepared_request = mock.Mock()
         c._create_prepared_request.return_value = prepared_request
@@ -1544,22 +1563,23 @@ class ConnectionTestCase(TestCase):
         for call in send_mock.mock_calls:
             self.assertEqual(call[1][0], prepared_request)
 
-    def test_connection__timeout(self):
-        c = Connection(connect_timeout_seconds=5, read_timeout_seconds=10, max_pool_connections=20)
-        assert c.client._client_config.connect_timeout == 5
-        assert c.client._client_config.read_timeout == 10
-        assert c.client._client_config.max_pool_connections == 20
+    async def test_connection__timeout(self):
+        c = AsyncConnection(connect_timeout_seconds=5, read_timeout_seconds=10, max_pool_connections=20)
+        assert (await c.client)._client_config.connect_timeout == 5
+        assert (await c.client)._client_config.read_timeout == 10
+        assert (await c.client)._client_config.max_pool_connections == 20
 
+    @unittest.skip("AsyncConnection does not have _create_prepared_request() nor _sign_request()")
     def test_sign_request(self):
         request = AWSRequest(method='POST', url='http://localhost:8000/', headers={}, data={'foo': 'bar'})
-        c = Connection(region='us-west-1')
+        c = AsyncConnection(region='us-west-1')
         c._sign_request(request)
         assert 'X-Amz-Date' in request.headers
         assert 'Authorization' in request.headers
         assert 'us-west-1' in request.headers['Authorization']
         assert request.headers['Authorization'].startswith('AWS4-HMAC-SHA256')
 
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call___extra_headers(self, client_mock):
         good_response = mock.Mock(spec=AWSResponse, status_code=200, headers={}, text='{}', content=b'{}')
 
@@ -1572,13 +1592,13 @@ class ConnectionTestCase(TestCase):
         create_request_mock = client_mock._endpoint.prepare_request
         create_request_mock.return_value = mock_req
 
-        c = Connection(extra_headers={'foo': 'bar'})
+        c = AsyncConnection(extra_headers={'foo': 'bar'})
         c._make_api_call('DescribeTable', {'TableName': 'MyTable'})
 
         assert send_mock.call_count == 1
         assert send_mock.call_args[0][0].headers.get('foo') == 'bar'
 
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call_throws_when_retries_exhausted(self, client_mock):
         prepared_request = AWSRequest('GET', 'http://lyft.com').prepare()
 
@@ -1589,7 +1609,7 @@ class ConnectionTestCase(TestCase):
             botocore.exceptions.ConnectionError(error="problems"),
             botocore.exceptions.ReadTimeoutError(endpoint_url="http://lyft.com"),
         ]
-        c = Connection()
+        c = AsyncConnection()
         c._max_retry_attempts_exception = 3
         c._create_prepared_request = mock.Mock()
         c._create_prepared_request.return_value = prepared_request
@@ -1602,7 +1622,7 @@ class ConnectionTestCase(TestCase):
             self.assertEqual(call[1][0], prepared_request)
 
     @mock.patch('random.randint')
-    @mock.patch('pynamodb.connection.Connection.client')
+    @mock.patch('inpynamodb.connection.AsyncConnection.client')
     def test_make_api_call_throws_retry_disabled(self, client_mock, rand_int_mock):
         prepared_request = AWSRequest('GET', 'http://lyft.com').prepare()
 
@@ -1610,7 +1630,7 @@ class ConnectionTestCase(TestCase):
         send_mock.side_effect = [
             botocore.exceptions.ReadTimeoutError(endpoint_url='http://lyft.com'),
         ]
-        c = Connection(read_timeout_seconds=11, base_backoff_ms=3, max_retry_attempts=0)
+        c = AsyncConnection(read_timeout_seconds=11, base_backoff_ms=3, max_retry_attempts=0)
         c._create_prepared_request = mock.Mock()
         c._create_prepared_request.return_value = prepared_request
 
@@ -1625,7 +1645,7 @@ class ConnectionTestCase(TestCase):
             self.assertEqual(call[1][0], prepared_request)
 
     def test_handle_binary_attributes_for_unprocessed_items(self):
-        binary_blob = six.b('\x00\xFF\x00\xFF')
+        binary_blob = b'\x00\xFF\x00\xFF'
 
         unprocessed_items = []
         for idx in range(0, 5):
@@ -1650,13 +1670,13 @@ class ConnectionTestCase(TestCase):
             })
 
         deep_eq(
-            Connection._handle_binary_attributes({UNPROCESSED_ITEMS: {'someTable': unprocessed_items}}),
+            AsyncConnection._handle_binary_attributes({UNPROCESSED_ITEMS: {'someTable': unprocessed_items}}),
             {UNPROCESSED_ITEMS: {'someTable': expected_unprocessed_items}},
             _assert=True
         )
 
     def test_handle_binary_attributes_for_unprocessed_keys(self):
-        binary_blob = six.b('\x00\xFF\x00\xFF')
+        binary_blob = b'\x00\xFF\x00\xFF'
         unprocessed_keys = {
             'UnprocessedKeys': {
                 'MyTable': {
@@ -1689,12 +1709,12 @@ class ConnectionTestCase(TestCase):
                 }
             }
         }
-        data = Connection._handle_binary_attributes(unprocessed_keys)
+        data = AsyncConnection._handle_binary_attributes(unprocessed_keys)
         self.assertEqual(data['UnprocessedKeys']['MyTable']['Keys'][0]['Subject']['B'], binary_blob)
         self.assertEqual(data['UnprocessedKeys']['MyOtherTable']['Keys'][0]['Subject']['B'], binary_blob)
 
-    def test_update_time_to_live_fail(self):
-        conn = Connection(self.region)
+    async def test_update_time_to_live_fail(self):
+        conn = AsyncConnection(self.region)
         with patch(PATCH_METHOD) as req:
             req.side_effect = BotoCoreError
-            self.assertRaises(TableError, conn.update_time_to_live, 'test table', 'my_ttl')
+            self.assertAsyncRaises(TableError, conn.update_time_to_live('test table', 'my_ttl'))
