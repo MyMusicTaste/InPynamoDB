@@ -1,0 +1,751 @@
+import asyncio
+import json
+import logging
+from inspect import getmembers
+
+from pynamodb.connection.util import pythonic
+from pynamodb.constants import BATCH_WRITE_PAGE_LIMIT, PUT, DELETE, ATTRIBUTES, UNPROCESSED_ITEMS, PUT_REQUEST, ITEM, \
+    DELETE_REQUEST, KEY, BATCH_GET_PAGE_LIMIT, RESPONSES, UNPROCESSED_KEYS, KEYS, RETURN_VALUES, ALL_NEW, RANGE_KEY, \
+    ITEM_COUNT, COUNT, READ_CAPACITY_UNITS, WRITE_CAPACITY_UNITS, STREAM_VIEW_TYPE, STREAM_SPECIFICATION, \
+    STREAM_ENABLED, BILLING_MODE, GLOBAL_SECONDARY_INDEXES, LOCAL_SECONDARY_INDEXES, ATTR_DEFINITIONS, ATTR_NAME, \
+    TABLE_STATUS, ACTIVE, INDEX_NAME, KEY_SCHEMA, PROJECTION, PROJECTION_TYPE, PAY_PER_REQUEST_BILLING_MODE, \
+    PROVISIONED_THROUGHPUT, NON_KEY_ATTRIBUTES
+from pynamodb.exceptions import DoesNotExist, TableDoesNotExist, TableError
+from pynamodb.models import Model as PynamoDBModel, MetaModel
+from pynamodb.types import HASH, RANGE
+
+from inpynamodb.connection import TableConnection
+from inpynamodb.indexes import Index, GlobalSecondaryIndex
+from inpynamodb.pagination import ResultIterator
+
+log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())
+
+
+class ModelContextManager(object):
+    """
+    A class for managing batch operations
+
+    """
+
+    def __init__(self, model, auto_commit=True):
+        self.model = model
+        self.auto_commit = auto_commit
+        self.max_operations = BATCH_WRITE_PAGE_LIMIT
+        self.pending_operations = []
+
+    async def __aenter__(self):
+        return self
+
+
+class BatchWrite(ModelContextManager):
+    """
+    A class for batch writes
+    """
+    async def save(self, put_item):
+        """
+        This adds `put_item` to the list of pending operations to be performed.
+
+        If the list currently contains 25 items, which is the DynamoDB imposed
+        limit on a BatchWriteItem call, one of two things will happen. If auto_commit
+        is True, a BatchWriteItem operation will be sent with the already pending
+        writes after which put_item is appended to the (now empty) list. If auto_commit
+        is False, ValueError is raised to indicate additional items cannot be accepted
+        due to the DynamoDB imposed limit.
+
+        :param put_item: Should be an instance of a `Model` to be written
+        """
+        if len(self.pending_operations) == self.max_operations:
+            if not self.auto_commit:
+                raise ValueError("DynamoDB allows a maximum of 25 batch operations")
+            else:
+                await self.commit()
+        self.pending_operations.append({"action": PUT, "item": put_item})
+
+    async def delete(self, del_item):
+        """
+        This adds `del_item` to the list of pending operations to be performed.
+
+        If the list currently contains 25 items, which is the DynamoDB imposed
+        limit on a BatchWriteItem call, one of two things will happen. If auto_commit
+        is True, a BatchWriteItem operation will be sent with the already pending
+        operations after which put_item is appended to the (now empty) list. If auto_commit
+        is False, ValueError is raised to indicate additional items cannot be accepted
+        due to the DynamoDB imposed limit.
+
+        :param del_item: Should be an instance of a `Model` to be deleted
+        """
+        if len(self.pending_operations) == self.max_operations:
+            if not self.auto_commit:
+                raise ValueError("DynamoDB allows a maximum of 25 batch operations")
+            else:
+                await self.commit()
+        self.pending_operations.append({"action": DELETE, "item": del_item})
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        This ensures that all pending operations are committed when
+        the context is exited
+        """
+        return await self.commit()
+
+    async def commit(self):
+        """
+        Writes all of the changes that are pending
+        """
+        log.debug("%s committing batch operation", self.model)
+        put_items = []
+        delete_items = []
+        attrs_name = pythonic(ATTRIBUTES)
+        for item in self.pending_operations:
+            if item['action'] == PUT:
+                put_items.append(item['item']._serialize(attr_map=True)[attrs_name])
+            elif item['action'] == DELETE:
+                delete_items.append(item['item']._get_keys())
+        self.pending_operations = []
+        if not len(put_items) and not len(delete_items):
+            return
+        data = await (await self.model._get_connection()).batch_write_item(
+            put_items=put_items,
+            delete_items=delete_items
+        )
+        if data is None:
+            return
+        unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
+        while unprocessed_items:
+            put_items = []
+            delete_items = []
+            for item in unprocessed_items:
+                if PUT_REQUEST in item:
+                    put_items.append(item.get(PUT_REQUEST).get(ITEM))
+                elif DELETE_REQUEST in item:
+                    delete_items.append(item.get(DELETE_REQUEST).get(KEY))
+            log.info("Resending %s unprocessed keys for batch operation", len(unprocessed_items))
+            data = await (await self.model._get_connection()).batch_write_item(
+                put_items=put_items,
+                delete_items=delete_items
+            )
+            unprocessed_items = data.get(UNPROCESSED_ITEMS, {}).get(self.model.Meta.table_name)
+
+
+class Model(PynamoDBModel, metaclass=MetaModel):
+    """
+    Defines a `InPynamoDB` Model
+
+    This model is backed by a table in DynamoDB.
+    You can create the table by with the ``create_table`` method.
+    """
+
+    # These attributes are named to avoid colliding with user defined
+    # DynamoDB attributes
+    _hash_keyname = None
+    _range_keyname = None
+    _indexes = None
+    _connection = None
+    _index_classes = None
+    DoesNotExist = DoesNotExist
+    _version_attribute_name = None
+
+    def __init__(self, hash_key=None, range_key=None, _user_instantiated=True, **attributes):
+        """
+        :param hash_key: Required. The hash key for this object.
+        :param range_key: Only required if the table has a range key attribute.
+        :param attrs: A dictionary of attributes to set on this object.
+        """
+        if hash_key is not None:
+            attributes[self._hash_keyname] = hash_key
+        if range_key is not None:
+            if self._range_keyname is None:
+                raise ValueError(
+                    "This table has no range key, but a range key value was provided: {}".format(range_key)
+                )
+            attributes[self._range_keyname] = range_key
+        super(Model, self).__init__(_user_instantiated=_user_instantiated, **attributes)
+
+    @classmethod
+    async def batch_get(cls, items, consistent_read=None, attributes_to_get=None):
+        """
+        BatchGetItem for this model
+
+        :param items: Should be a list of hash keys to retrieve, or a list of
+            tuples if range keys are used.
+        """
+        items = list(items)
+        hash_key_attribute = cls._hash_key_attribute()
+        range_key_attribute = cls._range_key_attribute()
+        keys_to_get = []
+        while items:
+            if len(keys_to_get) == BATCH_GET_PAGE_LIMIT:
+                while keys_to_get:
+                    page, unprocessed_keys = await cls._batch_get_page(
+                        keys_to_get,
+                        consistent_read=consistent_read,
+                        attributes_to_get=attributes_to_get
+                    )
+                    for batch_item in page:
+                        yield cls.from_raw_data(batch_item)
+                    if unprocessed_keys:
+                        keys_to_get = unprocessed_keys
+                    else:
+                        keys_to_get = []
+            item = items.pop()
+            if range_key_attribute:
+                hash_key, range_key = cls._serialize_keys(item[0], item[1])
+                keys_to_get.append({
+                    hash_key_attribute.attr_name: hash_key,
+                    range_key_attribute.attr_name: range_key
+                })
+            else:
+                hash_key = cls._serialize_keys(item)[0]
+                keys_to_get.append({
+                    hash_key_attribute.attr_name: hash_key
+                })
+
+        while keys_to_get:
+            page, unprocessed_keys = await cls._batch_get_page(
+                keys_to_get,
+                consistent_read=consistent_read,
+                attributes_to_get=attributes_to_get
+            )
+            for batch_item in page:
+                yield cls.from_raw_data(batch_item)
+            if unprocessed_keys:
+                keys_to_get = unprocessed_keys
+            else:
+                keys_to_get = []
+
+    @classmethod
+    def batch_write(cls, auto_commit=True):
+        """
+        Returns a BatchWrite context manager for a batch operation.
+
+        :param auto_commit: If true, the context manager will commit writes incrementally
+                            as items are written to as necessary to honor item count limits
+                            in the DynamoDB API (see BatchWrite). Regardless of the value
+                            passed here, changes automatically commit on context exit
+                            (whether successful or not).
+        """
+        return BatchWrite(cls, auto_commit=auto_commit)
+
+    def __repr__(self):
+        if self.Meta.table_name:
+            serialized = self._serialize(null_check=False)
+            if self._range_keyname:
+                msg = "{}<{}, {}>".format(self.Meta.table_name, serialized.get(HASH), serialized.get(RANGE))
+            else:
+                msg = "{}<{}>".format(self.Meta.table_name, serialized.get(HASH))
+            return msg
+
+    async def delete(self, condition=None):
+        """
+        Deletes this object from dynamodb
+        """
+        args, kwargs = self._get_save_args(attributes=False, null_check=False)
+        version_condition = self._handle_version_attribute(kwargs)
+        if version_condition is not None:
+            condition &= version_condition
+
+        kwargs.update(condition=condition)
+        return await (await self._get_connection()).delete_item(*args, **kwargs)
+
+    async def update(self, actions, condition=None):
+        """
+        Updates an item using the UpdateItem operation.
+
+        :param actions: a list of Action updates to apply
+        :param condition: an optional Condition on which to update
+        """
+        if not isinstance(actions, list) or len(actions) == 0:
+            raise TypeError("the value of `actions` is expected to be a non-empty list")
+
+        args, save_kwargs = self._get_save_args(null_check=False)
+        version_condition = self._handle_version_attribute(save_kwargs, actions=actions)
+        if version_condition is not None:
+            condition &= version_condition
+        kwargs = {
+            pythonic(RETURN_VALUES):  ALL_NEW,
+        }
+
+        if pythonic(RANGE_KEY) in save_kwargs:
+            kwargs[pythonic(RANGE_KEY)] = save_kwargs[pythonic(RANGE_KEY)]
+
+        kwargs.update(condition=condition)
+        kwargs.update(actions=actions)
+
+        data = await (await self._get_connection()).update_item(*args, **kwargs)
+        for name, value in data[ATTRIBUTES].items():
+            attr_name = self._dynamo_to_python_attr(name)
+            attr = self.get_attributes().get(attr_name)
+            if attr:
+                setattr(self, attr_name, attr.deserialize(attr.get_value(value)))
+        return data
+
+    async def save(self, condition=None):
+        """
+        Save this object to dynamodb
+        """
+        args, kwargs = self._get_save_args()
+        version_condition = self._handle_version_attribute(serialized_attributes=kwargs)
+        if version_condition is not None:
+            condition &= version_condition
+        kwargs.update(condition=condition)
+        data = await (await self._get_connection()).put_item(*args, **kwargs)
+        self.update_local_version_attribute()
+        return data
+
+    async def refresh(self, consistent_read=False):
+        """
+        Retrieves this object's data from dynamodb and syncs this local object
+
+        :param consistent_read: If True, then a consistent read is performed.
+        """
+        args, kwargs = self._get_save_args(attributes=False)
+        kwargs.setdefault('consistent_read', consistent_read)
+        attrs = await (await self._get_connection()).get_item(*args, **kwargs)
+        item_data = attrs.get(ITEM, None)
+        if item_data is None:
+            raise self.DoesNotExist("This item does not exist in the table.")
+        self._deserialize(item_data)
+
+    async def get_operation_kwargs_from_instance(self,
+                                                 key=KEY,
+                                                 actions=None,
+                                                 condition=None,
+                                                 return_values_on_condition_failure=None):
+        is_update = actions is not None
+        is_delete = actions is None and key is KEY
+        args, save_kwargs = self._get_save_args(null_check=not is_update)
+
+        version_condition = self._handle_version_attribute(
+            serialized_attributes={} if is_delete else save_kwargs,
+            actions=actions
+        )
+        if version_condition is not None:
+            condition &= version_condition
+
+        kwargs = dict(
+            key=key,
+            actions=actions,
+            condition=condition,
+            return_values_on_condition_failure=return_values_on_condition_failure
+        )
+        if not is_update:
+            kwargs.update(save_kwargs)
+        elif pythonic(RANGE_KEY) in save_kwargs:
+            kwargs[pythonic(RANGE_KEY)] = save_kwargs[pythonic(RANGE_KEY)]
+        return await (await self._get_connection()).get_operation_kwargs(*args, **kwargs)
+
+    @classmethod
+    async def get_operation_kwargs_from_class(cls,
+                                              hash_key,
+                                              range_key=None,
+                                              condition=None):
+        hash_key, range_key = cls._serialize_keys(hash_key, range_key)
+        return await (await cls._get_connection()).get_operation_kwargs(
+            hash_key=hash_key,
+            range_key=range_key,
+            condition=condition
+        )
+
+    @classmethod
+    async def get(cls, hash_key, range_key=None, consistent_read=False, attributes_to_get=None):
+        """
+        Returns a single object using the provided keys
+
+        :param hash_key: The hash key of the desired item
+        :param range_key: The range key of the desired item, only used when appropriate.
+        :param consistent_read
+        :param attributes_to_get
+        """
+        hash_key, range_key = cls._serialize_keys(hash_key, range_key)
+
+        data = await (await cls._get_connection()).get_item(
+            hash_key,
+            range_key=range_key,
+            consistent_read=consistent_read,
+            attributes_to_get=attributes_to_get
+        )
+        if data:
+            item_data = data.get(ITEM)
+            if item_data:
+                return cls.from_raw_data(item_data)
+        raise cls.DoesNotExist()
+
+    @classmethod
+    async def count(cls,
+                    hash_key=None,
+                    range_key_condition=None,
+                    filter_condition=None,
+                    consistent_read=False,
+                    index_name=None,
+                    limit=None,
+                    rate_limit=None):
+        """
+        Provides a filtered count
+
+        :param hash_key: The hash key to query. Can be None.
+        :param range_key_condition: Condition for range key
+        :param filter_condition: Condition used to restrict the query results
+        :param consistent_read: If True, a consistent read is performed
+        :param index_name: If set, then this index is used
+        :param rate_limit: If set then consumed capacity will be limited to this amount per second
+        """
+        if hash_key is None:
+            if filter_condition is not None:
+                raise ValueError('A hash_key must be given to use filters')
+            return (await cls.describe_table()).get(ITEM_COUNT)
+
+        cls._get_indexes()
+        if index_name:
+            hash_key = cls._index_classes[index_name]._hash_key_attribute().serialize(hash_key)
+        else:
+            hash_key = cls._serialize_keys(hash_key)[0]
+
+        query_args = (hash_key,)
+        query_kwargs = dict(
+            range_key_condition=range_key_condition,
+            filter_condition=filter_condition,
+            index_name=index_name,
+            consistent_read=consistent_read,
+            limit=limit,
+            select=COUNT
+        )
+
+        result_iterator = ResultIterator(
+            (await cls._get_connection()).query,
+            query_args,
+            query_kwargs,
+            limit=limit,
+            rate_limit=rate_limit
+        )
+
+        # iterate through results
+        [item async for item in result_iterator]
+
+        return result_iterator.total_count
+
+    @classmethod
+    async def query(cls,
+                    hash_key,
+                    range_key_condition=None,
+                    filter_condition=None,
+                    consistent_read=False,
+                    index_name=None,
+                    scan_index_forward=None,
+                    limit=None,
+                    last_evaluated_key=None,
+                    attributes_to_get=None,
+                    page_size=None,
+                    rate_limit=None):
+        """
+        Provides a high level query API
+
+        :param hash_key: The hash key to query
+        :param range_key_condition: Condition for range key
+        :param filter_condition: Condition used to restrict the query results
+        :param consistent_read: If True, a consistent read is performed
+        :param index_name: If set, then this index is used
+        :param limit: Used to limit the number of results returned
+        :param scan_index_forward: If set, then used to specify the same parameter to the DynamoDB API.
+            Controls descending or ascending results
+        :param last_evaluated_key: If set, provides the starting point for query.
+        :param attributes_to_get: If set, only returns these elements
+        :param page_size: Page size of the query to DynamoDB
+        :param rate_limit: If set then consumed capacity will be limited to this amount per second
+        """
+        cls._get_indexes()
+        if index_name:
+            hash_key = cls._index_classes[index_name]._hash_key_attribute().serialize(hash_key)
+        else:
+            hash_key = cls._serialize_keys(hash_key)[0]
+
+        if page_size is None:
+            page_size = limit
+
+        query_args = (hash_key,)
+        query_kwargs = dict(
+            range_key_condition=range_key_condition,
+            filter_condition=filter_condition,
+            index_name=index_name,
+            exclusive_start_key=last_evaluated_key,
+            consistent_read=consistent_read,
+            scan_index_forward=scan_index_forward,
+            limit=page_size,
+            attributes_to_get=attributes_to_get,
+        )
+
+        return ResultIterator(
+            (await cls._get_connection()).query,
+            query_args,
+            query_kwargs,
+            map_fn=cls.from_raw_data,
+            limit=limit,
+            rate_limit=rate_limit
+        )
+
+    @classmethod
+    async def scan(cls,
+                   filter_condition=None,
+                   segment=None,
+                   total_segments=None,
+                   limit=None,
+                   last_evaluated_key=None,
+                   page_size=None,
+                   consistent_read=None,
+                   index_name=None,
+                   rate_limit=None):
+        """
+        Iterates through all items in the table
+
+        :param filter_condition: Condition used to restrict the scan results
+        :param segment: If set, then scans the segment
+        :param total_segments: If set, then specifies total segments
+        :param limit: Used to limit the number of results returned
+        :param last_evaluated_key: If set, provides the starting point for scan.
+        :param page_size: Page size of the scan to DynamoDB
+        :param consistent_read: If True, a consistent read is performed
+        :param index_name: If set, then this index is used
+        :param rate_limit: If set then consumed capacity will be limited to this amount per second
+        """
+        if page_size is None:
+            page_size = limit
+
+        scan_args = ()
+        scan_kwargs = dict(
+            filter_condition=filter_condition,
+            exclusive_start_key=last_evaluated_key,
+            segment=segment,
+            limit=page_size,
+            total_segments=total_segments,
+            consistent_read=consistent_read,
+            index_name=index_name
+        )
+
+        return ResultIterator(
+            (await cls._get_connection()).scan,
+            scan_args,
+            scan_kwargs,
+            map_fn=cls.from_raw_data,
+            limit=limit,
+            rate_limit=rate_limit,
+        )
+
+    @classmethod
+    async def exists(cls):
+        """
+        Returns True if this table exists, False otherwise
+        """
+        try:
+            await (await cls._get_connection()).describe_table()
+            return True
+        except TableDoesNotExist:
+            return False
+
+    @classmethod
+    async def delete_table(cls):
+        """
+        Delete the table for this model
+        """
+        return await (await cls._get_connection()).delete_table()
+
+    @classmethod
+    async def describe_table(cls):
+        """
+        Returns the result of a DescribeTable operation on this model's table
+        """
+        return await (await cls._get_connection()).describe_table()
+
+    @classmethod
+    def _get_indexes(cls):
+        """
+        Returns a list of the secondary indexes
+        """
+        if cls._indexes is None:
+            cls._indexes = {
+                pythonic(GLOBAL_SECONDARY_INDEXES): [],
+                pythonic(LOCAL_SECONDARY_INDEXES): [],
+                pythonic(ATTR_DEFINITIONS): []
+            }
+            cls._index_classes = {}
+            for name, index in getmembers(cls, lambda o: isinstance(o, Index)):
+                cls._index_classes[index.Meta.index_name] = index
+                schema = index._get_schema()
+                idx = {
+                    pythonic(INDEX_NAME): index.Meta.index_name,
+                    pythonic(KEY_SCHEMA): schema.get(pythonic(KEY_SCHEMA)),
+                    pythonic(PROJECTION): {
+                        PROJECTION_TYPE: index.Meta.projection.projection_type,
+                    },
+
+                }
+                if isinstance(index, GlobalSecondaryIndex):
+                    if getattr(cls.Meta, 'billing_mode', None) != PAY_PER_REQUEST_BILLING_MODE:
+                        idx[pythonic(PROVISIONED_THROUGHPUT)] = {
+                            READ_CAPACITY_UNITS: index.Meta.read_capacity_units,
+                            WRITE_CAPACITY_UNITS: index.Meta.write_capacity_units
+                        }
+                cls._indexes[pythonic(ATTR_DEFINITIONS)].extend(schema.get(pythonic(ATTR_DEFINITIONS)))
+                if index.Meta.projection.non_key_attributes:
+                    idx[pythonic(PROJECTION)][NON_KEY_ATTRIBUTES] = index.Meta.projection.non_key_attributes
+                if isinstance(index, GlobalSecondaryIndex):
+                    cls._indexes[pythonic(GLOBAL_SECONDARY_INDEXES)].append(idx)
+                else:
+                    cls._indexes[pythonic(LOCAL_SECONDARY_INDEXES)].append(idx)
+        return cls._indexes
+
+    @classmethod
+    async def create_table(cls, wait=False, read_capacity_units=None, write_capacity_units=None, billing_mode=None,
+                           ignore_update_ttl_errors=False):
+        """
+        Create the table for this model
+
+        :param wait: If set, then this call will block until the table is ready for use
+        :param read_capacity_units: Sets the read capacity units for this table
+        :param write_capacity_units: Sets the write capacity units for this table
+        :param billing_mode: Sets the billing mode provisioned (default) or on_demand for this table
+        """
+        if not await cls.exists():
+            schema = cls._get_schema()
+            if hasattr(cls.Meta, pythonic(READ_CAPACITY_UNITS)):
+                schema[pythonic(READ_CAPACITY_UNITS)] = cls.Meta.read_capacity_units
+            if hasattr(cls.Meta, pythonic(WRITE_CAPACITY_UNITS)):
+                schema[pythonic(WRITE_CAPACITY_UNITS)] = cls.Meta.write_capacity_units
+            if hasattr(cls.Meta, pythonic(STREAM_VIEW_TYPE)):
+                schema[pythonic(STREAM_SPECIFICATION)] = {
+                    pythonic(STREAM_ENABLED): True,
+                    pythonic(STREAM_VIEW_TYPE): cls.Meta.stream_view_type
+                }
+            if hasattr(cls.Meta, pythonic(BILLING_MODE)):
+                schema[pythonic(BILLING_MODE)] = cls.Meta.billing_mode
+            if read_capacity_units is not None:
+                schema[pythonic(READ_CAPACITY_UNITS)] = read_capacity_units
+            if write_capacity_units is not None:
+                schema[pythonic(WRITE_CAPACITY_UNITS)] = write_capacity_units
+            if billing_mode is not None:
+                schema[pythonic(BILLING_MODE)] = billing_mode
+            index_data = cls._get_indexes()
+            schema[pythonic(GLOBAL_SECONDARY_INDEXES)] = index_data.get(pythonic(GLOBAL_SECONDARY_INDEXES))
+            schema[pythonic(LOCAL_SECONDARY_INDEXES)] = index_data.get(pythonic(LOCAL_SECONDARY_INDEXES))
+            index_attrs = index_data.get(pythonic(ATTR_DEFINITIONS))
+            attr_keys = [attr.get(pythonic(ATTR_NAME)) for attr in schema.get(pythonic(ATTR_DEFINITIONS))]
+            for attr in index_attrs:
+                attr_name = attr.get(pythonic(ATTR_NAME))
+                if attr_name not in attr_keys:
+                    schema[pythonic(ATTR_DEFINITIONS)].append(attr)
+                    attr_keys.append(attr_name)
+            await (await cls._get_connection()).create_table(
+                **schema
+            )
+        if wait:
+            while True:
+                status = await (await cls._get_connection()).describe_table()
+                if status:
+                    data = status.get(TABLE_STATUS)
+                    if data == ACTIVE:
+                        break
+                    else:
+                        await asyncio.sleep(2)
+                else:
+                    raise TableError("No TableStatus returned for table")
+
+        await cls.update_ttl(ignore_update_ttl_errors)
+
+    @classmethod
+    async def update_ttl(cls, ignore_update_ttl_errors):
+        """
+        Attempt to update the TTL on the table.
+        Certain implementations (eg: dynalite) do not support updating TTLs and will fail.
+        """
+        ttl_attribute = cls._ttl_attribute()
+        if ttl_attribute:
+            # Some dynamoDB implementations (eg: dynalite) do not support updating TTLs so
+            # this will fail.  It's fine for this to fail in those cases.
+            try:
+                await (await cls._get_connection()).update_time_to_live(ttl_attribute.attr_name)
+            except Exception:
+                if ignore_update_ttl_errors:
+                    log.info("Unable to update the TTL for {}".format(cls.Meta.table_name))
+                else:
+                    raise
+
+    @classmethod
+    async def dumps(cls):
+        """
+        Returns a JSON representation of this model's table
+        """
+        return json.dumps([item._get_json() async for item in await cls.scan()])
+
+    @classmethod
+    async def dump(cls, filename):
+        """
+        Writes the contents of this model's table as JSON to the given filename
+        """
+        with open(filename, 'w') as out:
+            out.write(await cls.dumps())
+
+    @classmethod
+    async def loads(cls, data):
+        content = json.loads(data)
+        async with cls.batch_write() as batch:
+            for item_data in content:
+                item = cls._from_data(item_data)
+                await batch.save(item)
+
+    @classmethod
+    async def load(cls, filename):
+        with open(filename, 'r') as inf:
+            await cls.loads(inf.read())
+
+    @classmethod
+    async def _batch_get_page(cls, keys_to_get, consistent_read, attributes_to_get):
+        """
+        Returns a single page from BatchGetItem
+        Also returns any unprocessed items
+
+        :param keys_to_get: A list of keys
+        :param consistent_read: Whether or not this needs to be consistent
+        :param attributes_to_get: A list of attributes to return
+        """
+        log.debug("Fetching a BatchGetItem page")
+        data = await (await cls._get_connection()).batch_get_item(
+            keys_to_get, consistent_read=consistent_read, attributes_to_get=attributes_to_get
+        )
+        item_data = data.get(RESPONSES).get(cls.Meta.table_name)
+        unprocessed_items = data.get(UNPROCESSED_KEYS).get(cls.Meta.table_name, {}).get(KEYS, None)
+        return item_data, unprocessed_items
+
+    @classmethod
+    async def _get_connection(cls):
+        """
+        Returns a (cached) connection
+        """
+        if not hasattr(cls, "Meta"):
+            raise AttributeError(
+                'As of v1.0 PynamoDB Models require a `Meta` class.\n'
+                'Model: {}.{}\n'
+                'See https://pynamodb.readthedocs.io/en/latest/release_notes.html\n'.format(
+                    cls.__module__, cls.__name__,
+                ),
+            )
+        elif not hasattr(cls.Meta, "table_name") or cls.Meta.table_name is None:
+            raise AttributeError(
+                'As of v1.0 PyanmoDB Models must have a table_name\n'
+                'Model: {}.{}\n'
+                'See https://pynamodb.readthedocs.io/en/latest/release_notes.html'.format(
+                    cls.__module__, cls.__name__,
+                ),
+            )
+        if cls._connection is None:
+            cls._connection = await TableConnection.initialize(cls.Meta.table_name,
+                                                               region=cls.Meta.region,
+                                                               host=cls.Meta.host,
+                                                               connect_timeout_seconds=cls.Meta.connect_timeout_seconds,
+                                                               read_timeout_seconds=cls.Meta.read_timeout_seconds,
+                                                               max_retry_attempts=cls.Meta.max_retry_attempts,
+                                                               base_backoff_ms=cls.Meta.base_backoff_ms,
+                                                               max_pool_connections=cls.Meta.max_pool_connections,
+                                                               extra_headers=cls.Meta.extra_headers,
+                                                               aws_access_key_id=cls.Meta.aws_access_key_id,
+                                                               aws_secret_access_key=cls.Meta.aws_secret_access_key,
+                                                               aws_session_token=cls.Meta.aws_session_token)
+        return cls._connection
