@@ -65,7 +65,7 @@ class TransactGet(Transaction):
 class TransactWrite(Transaction):
 
     def __init__(self, client_request_token=None, return_item_collection_metrics=None, **kwargs):
-        super(TransactWrite, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self._client_request_token = client_request_token
         self._return_item_collection_metrics = return_item_collection_metrics
         self._condition_check_items = []

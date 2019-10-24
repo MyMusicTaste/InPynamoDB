@@ -76,7 +76,7 @@ class PageIterator(object):
     http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.html#Query.Pagination
     http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.Pagination
     """
-    def __init__(self, operation, args, kwargs, rate_limit = None):
+    def __init__(self, operation, args, kwargs, rate_limit=None):
         self._operation = operation
         self._args = args
         self._kwargs = kwargs
@@ -101,7 +101,7 @@ class PageIterator(object):
         if self._rate_limiter:
             await self._rate_limiter.acquire()
             self._kwargs['return_consumed_capacity'] = TOTAL
-        page = await (self._operation(*self._args, **self._kwargs))
+        page = await self._operation(*self._args, **self._kwargs)
         self._last_evaluated_key = page.get(LAST_EVALUATED_KEY)
         self._total_scanned_count += page[SCANNED_COUNT]
 

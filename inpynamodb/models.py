@@ -348,7 +348,11 @@ class Model(PynamoDBModel, metaclass=MetaModel):
         )
 
     @classmethod
-    async def get(cls, hash_key, range_key=None, consistent_read=False, attributes_to_get=None):
+    async def get(cls,
+                  hash_key,
+                  range_key=None,
+                  consistent_read=False,
+                  attributes_to_get=None):
         """
         Returns a single object using the provided keys
 
@@ -420,7 +424,7 @@ class Model(PynamoDBModel, metaclass=MetaModel):
         )
 
         # iterate through results
-        [item async for item in result_iterator]
+        _ = [item async for item in result_iterator]
 
         return result_iterator.total_count
 

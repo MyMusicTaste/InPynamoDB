@@ -60,7 +60,7 @@ class Index(PynamoDBIndex):
         )
 
     @classmethod
-    async def scan(self,
+    async def scan(cls,
                    filter_condition=None,
                    segment=None,
                    total_segments=None,
@@ -72,7 +72,7 @@ class Index(PynamoDBIndex):
         """
         Scans an index
         """
-        return await self.Meta.model.scan(
+        return await cls.Meta.model.scan(
             filter_condition=filter_condition,
             segment=segment,
             total_segments=total_segments,
@@ -80,7 +80,7 @@ class Index(PynamoDBIndex):
             last_evaluated_key=last_evaluated_key,
             page_size=page_size,
             consistent_read=consistent_read,
-            index_name=self.Meta.index_name,
+            index_name=cls.Meta.index_name,
             **filters
         )
 
