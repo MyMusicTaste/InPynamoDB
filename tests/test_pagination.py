@@ -1,5 +1,6 @@
 import pytest
-from pynamodb.pagination import RateLimiter
+
+from inpynamodb.pagination import RateLimiter
 
 
 class MockTime:

@@ -1,21 +1,9 @@
+import asyncio
 import time
 
-import asyncio
-from pynamodb.constants import (CAMEL_COUNT, ITEMS, LAST_EVALUATED_KEY, SCANNED_COUNT,
-                                CONSUMED_CAPACITY, TOTAL, CAPACITY_UNITS)
-
-import functools
-import sys
-
-if sys.version_info < (3, 5, 2):
-    def aiter_compat(func):
-        @functools.wraps(func)
-        async def wrapper(self):
-            return func(self)
-        return wrapper
-else:
-    def aiter_compat(func):
-        return func
+from async_property import async_property
+from pynamodb.constants import TOTAL, LAST_EVALUATED_KEY, SCANNED_COUNT, CONSUMED_CAPACITY, CAPACITY_UNITS, CAMEL_COUNT, \
+    ITEMS
 
 
 class RateLimiter(object):
@@ -33,7 +21,7 @@ class RateLimiter(object):
             rate_limiter.consume(units)
 
     """
-    def __init__(self, rate_limit, time_module = None):
+    def __init__(self, rate_limit, time_module=None):
         """
         Initializes a RateLimiter object
 
@@ -63,8 +51,7 @@ class RateLimiter(object):
 
         :return: None
         """
-
-        asyncio.sleep(max(0, self._consumed/float(self.rate_limit) - (self._time_module.time()-self._time_of_last_acquire)))
+        self._time_module.sleep(max(0, self._consumed/float(self.rate_limit) - (self._time_module.time()-self._time_of_last_acquire)))
         self._consumed = 0
         self._time_of_last_acquire = self._time_module.time()
 
@@ -112,13 +99,9 @@ class PageIterator(object):
         self._kwargs['exclusive_start_key'] = self._last_evaluated_key
 
         if self._rate_limiter:
-            self._rate_limiter.acquire()
+            await self._rate_limiter.acquire()
             self._kwargs['return_consumed_capacity'] = TOTAL
-        if asyncio.iscoroutinefunction(self._operation):
-            page = await self._operation(*self._args, **self._kwargs)
-        else:
-            page = self._operation(*self._args, **self._kwargs)
-
+        page = await self._operation(*self._args, **self._kwargs)
         self._last_evaluated_key = page.get(LAST_EVALUATED_KEY)
         self._total_scanned_count += page[SCANNED_COUNT]
 
@@ -128,13 +111,14 @@ class PageIterator(object):
 
         return page
 
+    @async_property
     async def key_names(self):
         # If the current page has a last_evaluated_key, use it to determine key attributes
         if self._last_evaluated_key:
             return self._last_evaluated_key.keys()
 
         # Use the table meta data to determine the key attributes
-        table_meta = await self._operation.__self__.get_meta_table()
+        table_meta = await self._operation.__self__.get_meta_table()  # type: ignore
         return table_meta.get_key_names(self._kwargs.get('index_name'))
 
     @property
@@ -193,20 +177,14 @@ class ResultIterator(object):
         self._index += 1
         if self._limit is not None:
             self._limit -= 1
-
         if self._map_fn:
-            if asyncio.iscoroutinefunction(self._map_fn):
-                item = await self._map_fn(item)
-            else:
-                item = self._map_fn(item)
+            item = self._map_fn(item)
         return item
 
-    async def get_last_evaluated_key(self):
-        if self._first_iteration:
-            # Not started iterating yet: there cannot be a last_evaluated_key
-            return None
-
-        if self._index == self._count:
+    @async_property
+    async def last_evaluated_key(self):
+        if self._first_iteration or self._index == self._count:
+            # Not started iterating yet: return `exclusive_start_key` if set, otherwise expect None; or,
             # Entire page has been consumed: last_evaluated_key is whatever DynamoDB returned
             # It may correspond to the current item, or it may correspond to an item evaluated but not returned.
             return self.page_iter.last_evaluated_key
@@ -215,7 +193,7 @@ class ResultIterator(object):
         # The operation should be resumed starting at the last item returned, not the last item evaluated.
         # This can occur if the 'limit' is reached in the middle of a page.
         item = self._items[self._index - 1]
-        return dict((key, item[key]) for key in await self.page_iter.key_names())
+        return {key: item[key] for key in (await self.page_iter.key_names)}
 
     @property
     def total_count(self):
